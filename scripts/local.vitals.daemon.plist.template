@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  vitals LaunchAgent template.
+
+  Placeholders, substituted at install time by scripts/service-install.sh into
+  ~/Library/LaunchAgents/local.vitals.daemon.plist:
+    __NODE_BIN__  absolute path to node (a launchd job gets a bare PATH)
+    __NODE_DIR__  the directory holding it, prepended to PATH
+    __REPO__      absolute path to this repo
+    __TSX__       absolute path to the tsx ESM loader in __REPO__/node_modules
+    __LOG_DIR__   absolute log directory
+
+  A user LaunchAgent, not a root LaunchDaemon. Nothing here needs privilege:
+  4780 and 4781 are both unprivileged, and a process whose entire job is
+  accepting a phone's health exports has no business owning root.
+
+  node is exec'd directly rather than through `npm start`, so the job owns
+  exactly one process and a termination signal reaches the server itself. It
+  has a shutdown path -- close both listeners, checkpoint the WAL, close the
+  store -- and routing the signal through a package-manager wrapper would
+  leave that journal to luck.
+
+  The loader is an ABSOLUTE path, not the bare `tsx` specifier that `npm
+  start` can afford. A bare specifier resolves against the working directory,
+  which makes the job one WorkingDirectory mistake away from a crash-loop that
+  reads like a broken dependency.
+
+  No --env-file flag, deliberately. `npm start` reads the repo's .env; this
+  job does not, and any override for the service belongs in
+  EnvironmentVariables below. Two reasons. A service whose configuration comes
+  from a dotfile inside a git working copy is configuration nobody can see
+  from the thing that starts it. And --env-file-if-exists is a node >= 22.9
+  flag: on an older node that may also be installed, it degrades into a hard
+  --env-file and the job dies with ".env: not found" while the same command
+  works by hand. Carrying the flag also cost a permanent line on stderr on
+  every start, which is exactly the noise that makes "the error log is empty"
+  stop meaning anything.
+
+  node 22 is still required -- better-sqlite3 is compiled against its ABI --
+  and the installer proves that by loading the module with the binary it is
+  about to write in here, rather than by reading a version string.
+
+  The store path is deliberately NOT set here. src/config.ts derives it from
+  $HOME (~/Library/Application Support/vitals/vitals.db) -- absolute, and the
+  same whatever the working directory is. One daemon, one owner, one store:
+  an override in this file would be a second path to keep in sync, and the
+  failure it buys is two half-series nobody can compare.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>local.vitals.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE_BIN__</string>
+        <string>--import</string>
+        <string>__TSX__</string>
+        <string>__REPO__/src/server.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__NODE_DIR__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>NODE_ENV</key>
+        <string>production</string>
+    </dict>
+
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+        <string>Background</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- The property this job exists for: a crash comes back by itself. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- A missing credential or a held port exits non-zero on purpose. 30s
+         keeps that readable in the log instead of turning it into a spin. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Logs live outside the repo, next to the other services on this box.
+         The store is already outside it; the daemon's runtime files have no
+         reason to sit in a directory that gets committed and pushed. -->
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/vitals.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/vitals.err.log</string>
+</dict>
+</plist>

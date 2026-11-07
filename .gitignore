@@ -1,0 +1,21 @@
+# Health data never enters this repo. The store lives outside it
+# (~/Library/Application Support/vitals by default); these rules are the
+# second line of defence, not the first.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+var/
+
+# Credentials
+.env
+token
+*.token
+
+# Build / runtime
+node_modules/
+dist/
+.DS_Store
+*.log
