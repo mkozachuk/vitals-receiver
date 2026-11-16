@@ -95,6 +95,21 @@ describe("the page keeps every constraint the CSP states", () => {
   });
 });
 
+describe("the empty-ring caption", () => {
+  // Three faint tracks on an empty morning read as a page still loading. The
+  // caption says "nothing yet" -- and only when every ring is a literal 0.
+  const CAPTION = "No activity recorded yet today. The rings fill as deliveries arrive.";
+  it("shows only when all three rings read 0", async () => {
+    await seedTwoSources();
+    const m = model();
+    assert.ok(!renderFitness(m).includes(CAPTION), "a day with a moving ring carries no caption");
+    const zero = { ...m, rings: m.rings.map((r) => ({ ...r, value: 0, progress: 0 })) };
+    assert.ok(renderFitness(zero).includes(`<p class="caption rings-note">${CAPTION}</p>`));
+    const oneOff = { ...m, rings: m.rings.map((r, i) => ({ ...r, value: i === 0 ? 1 : 0 })) };
+    assert.ok(!renderFitness(oneOff).includes("rings-note"));
+  });
+});
+
 describe("the rings on the page", () => {
   it("gives every ring an accessible title, since colour cannot carry a value", async () => {
     await seedTwoSources();

@@ -42,6 +42,10 @@ const CARD_COLOUR: Record<string, string> = {
   energy: "move",
 };
 
+/** Cards that span two grid tracks. With nine cards on three tracks these
+ *  three make the rows close (3 / 2+1 / 2+1 / 1+2) with no orphan. */
+const WIDE_CARDS = new Set(["heart", "workouts", "HKQuantityTypeIdentifierHeartRateVariabilitySDNN"]);
+
 const circumference = (r: number): number => Math.round(2 * Math.PI * r * 100) / 100;
 
 const round = (v: number): string => String(Math.round(v * 100) / 100);
@@ -72,7 +76,7 @@ function ringArcs(ring: Ring, index: number): string {
   const first = Math.min(ring.progress, 1);
   const offset = round(c * (1 - first));
   const arcs =
-    `<circle class="ring-arc ring-arc-${cls}" cx="110" cy="110" r="${geo.r}" ` +
+    `<circle class="ring-arc ring-arc-${cls}" cx="110" cy="110" r="${geo.r}" stroke="url(#g-${cls})" ` +
     `stroke-dasharray="${c}" stroke-dashoffset="${offset}"></circle>`;
   // Over the goal: a second arc for the remainder, drawn on top with a soft
   // shadow so the overlap reads as a second lap. Two laps is the cap for
@@ -80,7 +84,7 @@ function ringArcs(ring: Ring, index: number): string {
   const extra = Math.min(Math.max(ring.progress - 1, 0), 1);
   const lap =
     extra > 0
-      ? `<circle class="ring-arc ring-arc-${cls} ring-lap" cx="110" cy="110" r="${geo.r}" ` +
+      ? `<circle class="ring-arc ring-arc-${cls} ring-lap" cx="110" cy="110" r="${geo.r}" stroke="url(#g-${cls})" ` +
         `stroke-dasharray="${c}" stroke-dashoffset="${round(c * (1 - extra))}"></circle>`
       : "";
   return `<g class="ring ring-${cls}" data-index="${index}">${title(ring.title)}${track}${arcs}${lap}</g>`;
@@ -128,9 +132,18 @@ function ringsBlock(model: Fitness): string {
     .map((n) => `<p class="footnote">${escapeHtml(n)}</p>`)
     .join("");
 
+  // An empty day must read as "nothing yet", not as a page still loading. Only
+  // when every ring reads a literal 0: a ring that is not exported reads a dash
+  // and has its own note above.
+  const allZero = model.rings.every((r) => r.value === 0);
+  const emptyNote = allZero
+    ? `<p class="caption rings-note">No activity recorded yet today. The rings fill as deliveries arrive.</p>`
+    : "";
+
   return (
     `<section class="card rings-card" aria-label="Today's rings">` +
     `<div class="rings-wrap">${svg}<div class="readout">${readout}</div></div>` +
+    emptyNote +
     notes +
     `</section>`
   );
@@ -209,7 +222,7 @@ function barChart(points: DayPoint[], colour: string, goal: number | null, label
       // excluded from every average -- without this, every morning reads as a
       // collapse and an example that lies before lunch is worthless.
       const hatch = p.partial
-        ? `<rect class="bar-hatch" x="${x}" y="${y}" width="${round(width)}" height="${round(h)}" rx="3"></rect>`
+        ? `<rect class="bar-hatch" x="${x}" y="${y}" width="${round(width)}" height="${round(h)}" rx="3" fill="url(#hatch)"></rect>`
         : "";
       return base + hatch;
     })
@@ -471,15 +484,17 @@ function metricCard(card: MetricCard): string {
   if (disclosed.length > 0) captions.push(disclosed);
 
   return (
-    `<article class="card metric metric-${escapeHtml(card.key)}${card.kind === "heart" ? " metric-wide" : ""}">` +
+    `<article class="card metric metric-${escapeHtml(card.key)}${WIDE_CARDS.has(card.key) ? " metric-wide" : ""}">` +
     `<div class="card-head">` +
     `<span class="card-label"><span class="dot dot-${colour}${card.state === "amber" ? " dot-amber" : ""}"></span>` +
-    `${escapeHtml(card.label)}</span>${sourceChip(card)}</div>` +
-    `<p class="metric-value">${headValue}<span class="metric-unit">${escapeHtml(card.unit)}</span>` +
+    `${escapeHtml(card.label)}</span>` +
+    // When the value is today's, the head says nothing; otherwise it names
+    // which day or span the number belongs to, top right, beside the source.
     (card.headline.label === "Today" && value !== null
       ? ""
       : `<span class="metric-when">${escapeHtml(card.headline.label)}</span>`) +
-    `</p>` +
+    `${sourceChip(card)}</div>` +
+    `<p class="metric-value">${headValue}<span class="metric-unit">${escapeHtml(card.unit)}</span></p>` +
     chart +
     workoutList(card) +
     (captions.length === 0 ? "" : `<p class="caption">${captions.join(" &middot; ")}</p>`) +
@@ -557,7 +572,7 @@ export function renderFitness(model: Fitness): string {
     `<link rel="stylesheet" href="/assets/app.css">\n` +
     `</head>\n<body>\n<main class="page">\n` +
     `<header class="head">` +
-    `<div class="head-title"><h1>${escapeHtml(model.title)}</h1>` +
+    `<div class="head-title"><p class="eyebrow">vitals</p><h1>${escapeHtml(model.title)}</h1>` +
     `<p class="date">${escapeHtml(model.dateLabel)}</p></div>` +
     pill(model, now) +
     `</header>\n` +
@@ -572,160 +587,96 @@ export function renderFitness(model: Fitness): string {
 }
 
 /**
- * The stylesheet. Dark first, because Fitness is; light via
- * prefers-color-scheme, because a distributed example gets opened on a
- * stranger's default-light browser and must not look broken there.
+ * The stylesheet. Light first, dark via prefers-color-scheme: the grey page
+ * and white cards of the healthd site, and the black page with #1c1c1e cards
+ * on a dark system. /pipe carries the same tokens.
  *
  * Ring circumferences are constants (2*pi*r for r = 92, 70, 48), which is what
  * lets the fill animation exist at all under `style-src 'self'`: the keyframe
  * names the empty state and the element's own presentation attribute is the
- * implicit end.
+ * implicit end. The gradient and hatch references are presentation attributes
+ * too (`stroke="url(#g-move)"`), so this constant names no url at all.
  */
 export const FITNESS_CSS = `:root {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --inset: #f2f2f7;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --accent: #d70015;
+  --line: #d2d2d7;
+  --band: #1d1d1f;
+  --band-ink: #f5f5f7;
+  --band-muted: #a1a1a6;
+  --ok: #1b7a36;
+  --warn: #8a5300;
+  --bad: #d70015;
+  --warn-bg: #fff3d1;
+  --move-a: #d70038;
+  --exer-a: #2f8a00;
+  --stand-a: #007c88;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) { :root {
   --bg: #000000;
-  --card: #1C1C1E;
-  --card-raised: #2C2C2E;
-  --text: #FFFFFF;
-  --text-2: rgba(235,235,245,.60);
-  /* Apple's tertiaryLabel is .30, which measures 2.5:1 on this card and fails
-     4.5:1 as TEXT -- and every caption on this page is text, not decoration.
-     Raised until it measures; the .30 tone survives as --hairline, for strokes
-     and rules, where the bar is 3:1 and decoration is the honest label. */
-  --text-3: rgba(235,235,245,.55);
-  --hairline: rgba(235,235,245,.42);
-  --separator: rgba(84,84,88,.36);
-  --good: #30D158;
-  --warn: #FFD60A;
-  --bad: #FF453A;
-
-  --move-a: #FA114F;  --move-b: #FF6A88;
-  --exer-a: #7AE82A;  --exer-b: #C6FF4A;
-  --stand-a: #1AD4E2; --stand-b: #5FF6FF;
-  --sleepring-a: #5E5CE6; --sleepring-b: #9B99FF;
-
-  --move-track: rgba(250,17,79,.18);
-  --exer-track: rgba(122,232,42,.18);
-  --stand-track: rgba(26,212,226,.18);
-  --sleepring-track: rgba(94,92,230,.18);
-
-  --steps: #30D158;
-  --distance: #0A84FF;
-  --flights: #FF9F0A;
-  --heart: #FF375F;
-  --sleep: #5E5CE6;
-  --generic: #8E8E93;
-  --sleep-deep: #3634A3;
-  --sleep-core: #5E5CE6;
-  --sleep-rem: #64D2FF;
+  --surface: #1c1c1e;
+  --inset: #2c2c2e;
+  --ink: #f5f5f7;
+  --muted: #a1a1a6;
+  --accent: #ff453a;
+  --line: #38383a;
+  --band: #1c1c1e;
+  --band-ink: #f5f5f7;
+  --band-muted: #a1a1a6;
+  --ok: #30d158;
+  --warn: #ffd60a;
+  --bad: #ff453a;
+  --warn-bg: #2b2410;
+  --move-a: #fa114f;
+  --exer-a: #7ae82a;
+  --stand-a: #1ad4e2;
+} }
+/* Data colours: the charts are the one place the page keeps colour beyond the accent. Light values were darkened until they measure on a white card; kept. */
+:root {
+  --move-b: #ff4d74; --exer-b: #7bd41f; --stand-b: #1ac3d0; --sleepring-a: #4744c7; --sleepring-b: #9b99ff;
+  --move-track: rgba(215,0,56,.22); --exer-track: rgba(47,138,0,.22); --stand-track: rgba(0,124,136,.22); --sleepring-track: rgba(71,68,199,.22);
+  --steps: #1e8e3e; --distance: #0a6ed1; --flights: #b35c00; --heart: #d60036; --heart-band: rgba(214,0,54,.16); --sleep: #4744c7; --generic: #6e6e73;
+  --sleep-deep: #2a287e; --sleep-core: #4744c7; --sleep-rem: #0e7c94;
 }
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #F2F2F7;
-    --card: #FFFFFF;
-    --card-raised: #F2F2F7;
-    --text: #000000;
-    --text-2: rgba(60,60,67,.85);
-    --text-3: rgba(60,60,67,.76);
-    --hairline: rgba(60,60,67,.40);
-    --separator: rgba(60,60,67,.29);
-    /* Apple's light systemGreen/Red are ~2:1 and ~3.5:1 on white. The pill is
-       a status word, so it is darkened until it measures 4.5:1 -- a status
-       light that cannot be read is decoration. */
-    --good: #17772F;
-    --warn: #9A5B00;
-    --bad: #C7150C;
-    --move-a: #D70038; --move-b: #FF4D74;
-    --exer-a: #3F9E00; --exer-b: #7BD41F;
-    --stand-a: #007C88; --stand-b: #1AC3D0;
-    /* The sleep stages were the one palette left in its dark form: #64D2FF on
-       a white card measures 1.7:1, which is not a colour, it is a rumour. */
-    --sleep: #4744C7;
-    --sleep-deep: #2A287E;
-    --sleep-core: #4744C7;
-    --sleep-rem: #0E7C94;
-    --steps: #1E8E3E;
-    --distance: #0A6ED1;
-    --flights: #B35C00;
-    --heart: #D60036;
-    --generic: #6E6E73;
-  }
-}
-
+@media (prefers-color-scheme: dark) { :root {
+  --move-b: #ff6a88; --exer-b: #c6ff4a; --stand-b: #5ff6ff; --sleepring-a: #5e5ce6; --sleepring-b: #9b99ff;
+  --move-track: rgba(250,17,79,.22); --exer-track: rgba(122,232,42,.22); --stand-track: rgba(26,212,226,.22); --sleepring-track: rgba(94,92,230,.22);
+  --steps: #30d158; --distance: #0a84ff; --flights: #ff9f0a; --heart: #ff375f; --heart-band: rgba(255,55,95,.18); --sleep: #5e5ce6; --generic: #8e8e93;
+  --sleep-deep: #3634a3; --sleep-core: #5e5ce6; --sleep-rem: #64d2ff;
+} }
+/* Layout and SVG classes. Colours arrive through tokens, sizes through the type-scale block at the end. */
 * { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
-               system-ui, "Segoe UI", Roboto, sans-serif;
-  font-size: 15px;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
-  -webkit-font-smoothing: antialiased;
-}
-
-.page { max-width: 1040px; margin: 0 auto; padding: 20px 20px 40px; }
-
-.head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+.page { max-width: var(--page-max); margin: 0 auto; padding: var(--page-pad); }
+.head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: var(--gap); }
 .head-title { flex: 1; min-width: 200px; }
-h1 { font-size: 34px; font-weight: 700; letter-spacing: -.5px; margin: 0; }
-h2 { font-size: 20px; font-weight: 700; margin: 28px 0 12px; }
-.date { margin: 2px 0 0; font-size: 15px; color: var(--text-2); }
-
-.pill {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 14px; border-radius: 999px;
-  background: var(--card); color: var(--text);
-  font-size: 13px; font-weight: 600; text-decoration: none;
-  margin-top: 6px;
-}
-.pill:hover { filter: brightness(1.14); }
-.pill-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hairline); }
-.pill-ok .pill-dot { background: var(--good); }
-.pill-warn .pill-dot { background: var(--warn); }
-.pill-bad .pill-dot { background: var(--bad); }
-.pill-ok { color: var(--good); }
-.pill-warn { color: var(--warn); }
-.pill-bad { color: var(--bad); }
-.pill-arrow { color: var(--text-3); font-size: 16px; line-height: 1; }
-
-.banner {
-  margin: 0 0 16px; padding: 12px 16px; border-radius: 12px;
-  background: var(--card); color: var(--warn); font-size: 14px; font-weight: 600;
-}
+.eyebrow { margin: 0 0 2px; color: var(--muted); }
+h1 { margin: 0; letter-spacing: -.02em; }
+.date { margin: 2px 0 0; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: var(--surface); color: var(--ok); text-decoration: none; }
+.pill-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.pill-warn { color: var(--warn); } .pill-warn .pill-dot { background: var(--warn); }
+.pill-bad { color: var(--bad); } .pill-bad .pill-dot { background: var(--bad); }
+.pill-empty { color: var(--ink); } .pill-empty .pill-dot { background: var(--muted); }
+.pill-arrow { color: var(--muted); font-size: 16px; line-height: 1; }
+.pill:hover { filter: brightness(.97); }
+.banner { margin: 0 0 var(--gap); padding: 12px 16px; border-radius: 12px; background: var(--surface); color: var(--warn); font-weight: 600; }
 .banner-bad { color: var(--bad); }
-
-.card { background: var(--card); border-radius: 18px; padding: 20px; }
-.rings-card { margin-bottom: 14px; }
-.rings-wrap { display: flex; align-items: center; justify-content: center; gap: 40px; flex-wrap: wrap; }
+.card { background: var(--surface); border-radius: var(--radius); padding: var(--card-pad); }
+.rings-card { margin-bottom: var(--gap); }
+.rings-wrap { display: flex; align-items: center; justify-content: center; gap: 56px; flex-wrap: wrap; }
 .rings { width: 220px; height: 220px; flex: none; }
 .rings-rotate { transform: rotate(-90deg); transform-origin: 110px 110px; }
-
 .ring-track { fill: none; stroke-width: 18; }
-.ring-track-move { stroke: var(--move-track); }
-.ring-track-exer { stroke: var(--exer-track); }
-.ring-track-stand { stroke: var(--stand-track); }
-.ring-track-sleepring { stroke: var(--sleepring-track); }
-.ring-ghost { stroke: var(--hairline); stroke-dasharray: 3 11; stroke-width: 18; opacity: .5; }
-
+.ring-track-move { stroke: var(--move-track); } .ring-track-exer { stroke: var(--exer-track); } .ring-track-stand { stroke: var(--stand-track); } .ring-track-sleepring { stroke: var(--sleepring-track); }
+.ring-ghost { stroke: var(--muted); stroke-dasharray: 3 11; stroke-width: 18; }
 .ring-arc { fill: none; stroke-width: 18; stroke-linecap: round; }
-.ring-arc-move { stroke: url(#g-move); }
-.ring-arc-exer { stroke: url(#g-exer); }
-.ring-arc-stand { stroke: url(#g-stand); }
-.ring-arc-sleepring { stroke: url(#g-sleepring); }
 .ring-lap { filter: drop-shadow(0 0 6px rgba(0,0,0,.55)); }
-
-.stop-move-a { stop-color: var(--move-a); }
-.stop-move-b { stop-color: var(--move-b); }
-.stop-exer-a { stop-color: var(--exer-a); }
-.stop-exer-b { stop-color: var(--exer-b); }
-.stop-stand-a { stop-color: var(--stand-a); }
-.stop-stand-b { stop-color: var(--stand-b); }
-.stop-sleepring-a { stop-color: var(--sleepring-a); }
-.stop-sleepring-b { stop-color: var(--sleepring-b); }
-
 /* The fill: a keyframe with no \`to\`, so the end value is the element's own
    stroke-dashoffset attribute. One per radius, because the circumference is
    the only thing the stylesheet can know. */
@@ -733,125 +684,104 @@ h2 { font-size: 20px; font-weight: 700; margin: 28px 0 12px; }
 @keyframes fill-70 { from { stroke-dashoffset: 439.82; } }
 @keyframes fill-48 { from { stroke-dashoffset: 301.59; } }
 @media (prefers-reduced-motion: no-preference) {
-  .ring-move .ring-arc  { animation: fill-92 .9s cubic-bezier(.25,.8,.3,1); }
-  .ring-exer .ring-arc  { animation: fill-70 .9s cubic-bezier(.25,.8,.3,1); }
-  .ring-stand .ring-arc,
-  .ring-sleepring .ring-arc { animation: fill-48 .9s cubic-bezier(.25,.8,.3,1); }
+  .ring-move .ring-arc { animation: fill-92 .9s cubic-bezier(.25,.8,.3,1); }
+  .ring-exer .ring-arc { animation: fill-70 .9s cubic-bezier(.25,.8,.3,1); }
+  .ring-stand .ring-arc, .ring-sleepring .ring-arc { animation: fill-48 .9s cubic-bezier(.25,.8,.3,1); }
 }
-
+.stop-move-a { stop-color: var(--move-a); } .stop-move-b { stop-color: var(--move-b); }
+.stop-exer-a { stop-color: var(--exer-a); } .stop-exer-b { stop-color: var(--exer-b); }
+.stop-stand-a { stop-color: var(--stand-a); } .stop-stand-b { stop-color: var(--stand-b); }
+.stop-sleepring-a { stop-color: var(--sleepring-a); } .stop-sleepring-b { stop-color: var(--sleepring-b); }
+.hatch-line { stroke: var(--line); stroke-width: 2; }
 .readout { display: flex; flex-direction: column; gap: 14px; min-width: 200px; }
-.readout-label { font-size: 13px; font-weight: 600; color: var(--text-2); }
-.readout-ghost .readout-label { color: var(--text-3); }
+.readout-label { color: var(--muted); }
 .readout-value { display: flex; align-items: baseline; gap: 6px; }
-.readout-num { font-size: 30px; font-weight: 700; }
-.readout-num-move { color: var(--move-a); }
-.readout-num-exer { color: var(--exer-a); }
-.readout-num-stand { color: var(--stand-a); }
-.readout-num-sleepring { color: var(--sleepring-a); }
-.readout-ghost .readout-num { color: var(--text-3); }
-.readout-goal { font-size: 15px; font-weight: 600; color: var(--text-2); }
-
-.week { display: flex; justify-content: space-between; gap: 4px; margin-bottom: 14px; }
-.week-day { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 8px; border-radius: 14px; flex: 1; }
-.week-today { background: var(--card-raised); }
+.readout-num-move { color: var(--move-a); } .readout-num-exer { color: var(--exer-a); } .readout-num-stand { color: var(--stand-a); } .readout-num-sleepring { color: var(--sleepring-a); }
+.readout-goal { color: var(--muted); }
+.readout-ghost .readout-label, .readout-ghost .readout-num { color: var(--muted); }
+.rings-note { text-align: center; margin-top: 16px; }
+.week { display: flex; justify-content: space-between; gap: 4px; margin-bottom: var(--gap); padding-top: 12px; padding-bottom: 12px; }
+.week-day { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px; border-radius: 14px; flex: 1; }
+.week-today { background: var(--inset); }
 .mini { width: 48px; height: 48px; }
 .rings-rotate-mini { transform: rotate(-90deg); transform-origin: 24px 24px; }
 .mini-track { fill: none; stroke-width: 4; }
-.mini-track-move { stroke: var(--move-track); }
-.mini-track-exer { stroke: var(--exer-track); }
-.mini-track-stand { stroke: var(--stand-track); }
-.mini-track-sleepring { stroke: var(--sleepring-track); }
-.mini-dotted { stroke: var(--hairline); stroke-width: 3; stroke-dasharray: 1.5 4; }
+.mini-track-move { stroke: var(--move-track); } .mini-track-exer { stroke: var(--exer-track); } .mini-track-stand { stroke: var(--stand-track); } .mini-track-sleepring { stroke: var(--sleepring-track); }
+.mini-dotted { stroke: var(--muted); stroke-width: 3; stroke-dasharray: 1.5 4; opacity: .7; }
 .mini-arc { fill: none; stroke-width: 4; stroke-linecap: round; }
-.mini-arc-move { stroke: var(--move-a); }
-.mini-arc-exer { stroke: var(--exer-a); }
-.mini-arc-stand { stroke: var(--stand-a); }
-.mini-arc-sleepring { stroke: var(--sleepring-a); }
-.week-initial { font-size: 12px; color: var(--text-3); font-weight: 600; }
-.week-today .week-initial { color: var(--text); }
-
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; align-items: start; }
+.mini-arc-move { stroke: var(--move-a); } .mini-arc-exer { stroke: var(--exer-a); } .mini-arc-stand { stroke: var(--stand-a); } .mini-arc-sleepring { stroke: var(--sleepring-a); }
+.week-initial { color: var(--muted); }
+.week-today .week-initial { color: var(--ink); }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); grid-auto-flow: dense; }
+.metric { display: flex; flex-direction: column; }
 .metric-wide { grid-column: span 2; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.card-label { font-size: 13px; font-weight: 600; color: var(--text-2); display: inline-flex; align-items: center; gap: 7px; }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--generic); display: inline-block; }
-.dot-steps { background: var(--steps); }
-.dot-distance { background: var(--distance); }
-.dot-flights { background: var(--flights); }
-.dot-heart { background: var(--heart); }
-.dot-sleep { background: var(--sleep); }
-.dot-exer { background: var(--exer-a); }
-.dot-move { background: var(--move-a); }
-.dot-amber { background: var(--warn); }
-.chip {
-  font-size: 11px; font-weight: 600; color: var(--text-3);
-  background: var(--card-raised); border-radius: 999px; padding: 3px 9px; white-space: nowrap;
-}
-.metric-value { margin: 10px 0 12px; font-size: 28px; font-weight: 700; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.metric-unit { font-size: 15px; font-weight: 600; color: var(--text-2); }
-.metric-when { font-size: 12px; font-weight: 400; color: var(--text-3); margin-left: auto; }
+.card-label { color: var(--muted); display: inline-flex; align-items: center; gap: 7px; margin-right: auto; }
+.metric-when { color: var(--muted); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--generic); display: inline-block; flex: none; }
+.dot-steps { background: var(--steps); } .dot-distance { background: var(--distance); } .dot-flights { background: var(--flights); } .dot-heart { background: var(--heart); } .dot-sleep { background: var(--sleep); } .dot-exer { background: var(--exer-a); } .dot-move { background: var(--move-a); } .dot-amber { background: var(--warn); }
+.chip { color: var(--muted); background: var(--inset); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+.metric-value { margin: 10px 0 12px; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; letter-spacing: -.02em; }
+.metric-unit { color: var(--muted); letter-spacing: 0; }
 .chart { display: block; width: 100%; height: auto; }
 .chart-tall { min-height: 96px; }
 .bar { fill: var(--generic); }
-.bar-steps { fill: var(--steps); }
-.bar-distance { fill: var(--distance); }
-.bar-flights { fill: var(--flights); }
-.bar-heart { fill: var(--heart); }
-.bar-move { fill: var(--move-a); }
-.bar-basal { fill: var(--hairline); }
-.bar-exer { fill: var(--exer-a); }
-.bar-sleep-deep { fill: var(--sleep-deep); }
-.bar-sleep-core { fill: var(--sleep-core); }
-.bar-sleep-rem { fill: var(--sleep-rem); }
-.bar-sleep-unspec { fill: var(--sleep); }
-.bar-sleep-inbed { fill: var(--hairline); }
+.bar-steps { fill: var(--steps); } .bar-distance { fill: var(--distance); } .bar-flights { fill: var(--flights); } .bar-heart { fill: var(--heart); } .bar-move { fill: var(--move-a); } .bar-basal { fill: var(--line); } .bar-exer { fill: var(--exer-a); }
+.bar-sleep-deep { fill: var(--sleep-deep); } .bar-sleep-core { fill: var(--sleep-core); } .bar-sleep-rem { fill: var(--sleep-rem); } .bar-sleep-unspec { fill: var(--sleep); } .bar-sleep-inbed { fill: var(--line); }
 .bar-partial { opacity: .55; }
-.bar-hatch { fill: url(#hatch); }
-.hatch-line { stroke: var(--hairline); stroke-width: 2; }
-.goal-line { stroke: var(--hairline); stroke-width: 1; stroke-dasharray: 3 4; }
-.hr-band { fill: rgba(255,55,95,.18); stroke: none; }
+.goal-line { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.hr-band { fill: var(--heart-band); stroke: none; }
 .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.line-generic { stroke: var(--generic); }
-.line-dot { fill: var(--generic); }
+.line-generic { stroke: var(--generic); } .line-dot { fill: var(--generic); }
 .hr-mean { fill: none; stroke: var(--heart); stroke-width: 1.6; stroke-linejoin: round; }
-
-.workouts { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.workout { display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 10px; align-items: baseline; font-size: 14px; }
-.glyph { width: 16px; height: 16px; fill: var(--exer-a); flex: none; grid-row: span 2; }
+.workouts { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
+.workout { display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 10px; align-items: baseline; }
+.glyph { width: 16px; height: 16px; fill: var(--exer-a); grid-row: span 2; align-self: start; }
 .workout-name { font-weight: 600; }
-/* The stats get their own row: on a 260px card "743 kcal" used to wrap its
-   unit onto a line of its own and ragged every date in the column. */
-.workout-stats { grid-column: 2 / span 2; color: var(--text-2); font-size: 13px; }
-.workout-when { color: var(--text-2); font-size: 13px; white-space: nowrap; text-align: right; }
-
-.caption { margin: 10px 0 0; font-size: 12px; color: var(--text-3); }
-.footnote { margin: 12px 0 0; font-size: 12px; color: var(--text-3); }
-.not-exported { margin-top: 16px; }
+.workout-stats { grid-column: 2 / span 2; color: var(--muted); }
+.workout-when { grid-column: 3; grid-row: 1; color: var(--muted); white-space: nowrap; text-align: right; }
+.caption { margin: 10px 0 0; color: var(--muted); }
+.metric .caption { margin-top: auto; padding-top: 10px; }
+.footnote { margin: 12px 0 0; color: var(--muted); }
+.not-exported { margin-top: var(--gap); }
+.empty-block h2 { margin: 0 0 8px; }
+.setup { color: var(--muted); padding-left: 20px; }
 .rendered { text-align: center; }
-.empty-block h2 { margin-top: 0; }
-.setup { color: var(--text-2); font-size: 14px; padding-left: 20px; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--text); }
-
-.foot {
-  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--separator);
-  font-size: 12px; color: var(--text-3);
-}
-a { color: var(--distance); }
-.foot a, .footnote a { text-decoration: none; }
-.foot a:hover, .footnote a:hover { text-decoration: underline; }
-
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .9em; color: var(--ink); }
+.foot span { overflow-wrap: anywhere; }
+.foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); }
+a { color: var(--accent); }
+.foot a, .footnote a { text-decoration: none; } .foot a:hover, .footnote a:hover { text-decoration: underline; }
+@media (max-width: 1023px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .metric-wide { grid-column: span 2; } }
 @media (max-width: 719px) {
   .rings-wrap { flex-direction: column; align-items: center; gap: 20px; }
   .readout { width: 100%; max-width: 280px; }
-  .metric-wide { grid-column: span 1; }
+  .grid { grid-template-columns: minmax(0, 1fr); } .metric-wide { grid-column: span 1; }
+  .workouts { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 479px) {
-  .page { padding: 12px 12px 28px; }
-  h1 { font-size: 30px; }
-  .week { padding: 12px 6px; }
-  .week-day { padding: 4px 2px; }
-  .mini { width: 38px; height: 38px; }
-  .rings { width: 200px; height: 200px; }
+  .week { padding: 10px 6px; } .week-day { padding: 4px 2px; } .mini { width: 38px; height: 38px; } .rings { width: 200px; height: 200px; }
+  .metric-when { flex: none; }
+}
+@media (prefers-color-scheme: dark) { .card { border: 1px solid var(--line); } }
+/* The 1 px lift is a light-scheme thing; on black the card carries the hairline above instead. */
+/* Type scale and spacing: grey page, white 18 px cards (title 40/30, h2 21, body 17, small 15, eyebrow 13). */
+:root { --page-max: 1080px; --page-pad: 24px 20px 48px; --gap: 16px; --card-pad: 24px; --radius: 18px; }
+@media (prefers-color-scheme: light) { .card { box-shadow: 0 1px 2px rgba(0,0,0,.04); } }
+h2 { font-size: 21px; font-weight: 600; line-height: 1.3; }
+.eyebrow { font-size: 13px; font-weight: 600; line-height: 1.2; color: var(--accent); }
+h1 { font-size: 40px; font-weight: 700; line-height: 1.1; }
+.date, body { font-size: 17px; font-weight: 400; line-height: 1.55; }
+.pill { font-size: 15px; font-weight: 600; line-height: 1.2; background: var(--surface); }
+.readout-label, .card-label { font-size: 15px; font-weight: 600; line-height: 1.3; }
+.readout-num { font-size: 30px; font-weight: 700; line-height: 1.1; }
+.readout-goal, .metric-unit { font-size: 15px; font-weight: 600; line-height: 1.2; }
+.metric-value { font-size: 34px; font-weight: 700; line-height: 1.1; }
+.metric-when, .week-initial, .chip { font-size: 13px; font-weight: 600; line-height: 1.2; }
+.workout, .workout-stats, .workout-when { font-size: 15px; line-height: 1.45; }
+.caption, .footnote, .foot { font-size: 13px; font-weight: 400; line-height: 1.45; }
+@media (max-width: 479px) {
+  :root { --page-pad: 16px 14px 32px; --gap: 12px; --card-pad: 18px; }
+  h1 { font-size: 30px; } .metric-value { font-size: 28px; } .readout-num { font-size: 28px; } body, .date { font-size: 16px; }
 }
 `;

@@ -10,7 +10,7 @@ import {
   SLEEP_TYPE,
   STEP_TYPE,
 } from "../src/dashboard.js";
-import { formatBytes, formatDuration, localStamp, relativeTime, sparkline } from "../src/render.js";
+import { DASHBOARD_CSS, formatBytes, formatDuration, localStamp, relativeTime, sparkline } from "../src/render.js";
 import { count, envelope, fixtureBytes, harness, one, pinnedClock, quantitySample, rows, TOKEN, type Harness } from "./helpers.js";
 
 /**
@@ -453,7 +453,7 @@ describe("the runs list's span", () => {
       source: "occasion",
     });
     const res = await page();
-    const cell = `<td title="occasion">${localStamp("2026-09-17T04:00:00.000Z")} → ${localStamp("2026-09-19T09:00:00.000Z")}</td>`;
+    const cell = `<td title="occasion" data-k="span">${localStamp("2026-09-17T04:00:00.000Z")} → ${localStamp("2026-09-19T09:00:00.000Z")}</td>`;
     assert.ok(res.html.includes(cell), "the runs list shows the occasion, not batch 1's bracket");
   });
 
@@ -471,8 +471,72 @@ describe("the runs list's span", () => {
     const run = model().runs[0];
     assert.deepEqual(run?.span, { start: "2026-09-18T10:00:00.000Z", end: "2026-09-19T10:30:00.000Z", source: "window" });
     const res = await page();
-    const cell = `<td title="window">${localStamp("2026-09-18T10:00:00.000Z")} → ${localStamp("2026-09-19T10:30:00.000Z")}</td>`;
+    const cell = `<td title="window" data-k="span">${localStamp("2026-09-18T10:00:00.000Z")} → ${localStamp("2026-09-19T10:30:00.000Z")}</td>`;
     assert.ok(res.html.includes(cell), "no occasion: the run's extent across both batches");
+  });
+});
+
+describe("the page on a phone", () => {
+  // Below 720 px every .grid table stacks into label | value rows, and the
+  // label is the cell's data-k attribute (the CSP forbids inline style). A
+  // cell without it is a bare value with no column name on a phone.
+  it("labels every cell of every .grid table with its column header", async () => {
+    const at = localIso(2026, 9, 19, 7, 0);
+    await h.post(envelope({ samples: [quantitySample({ type: STEP_TYPE, start: at, end: at, value: 1200, unit: "count" })] }));
+    await h.post(
+      envelope({
+        exportId: "99999999-0000-4000-8000-000000000001",
+        samples: [
+          {
+            uuid: "EEEEEEEE-0000-4000-8000-000000000002",
+            id: "d".repeat(64),
+            type: "HKWorkoutTypeIdentifier",
+            group: "workout",
+            source: "com.apple.health.dev",
+            start: localIso(2026, 9, 19, 8, 0),
+            end: localIso(2026, 9, 19, 8, 30),
+            kind: "workout",
+            activityType: 37,
+            activityName: "Running",
+            durationSeconds: 1800,
+            distanceMeters: 5000,
+            activeEnergyKilocalories: 300,
+          },
+        ],
+      }),
+    );
+    const res = await page();
+    const tables = [...res.html.matchAll(/<table class="grid ([\w-]+)">([\s\S]*?)<\/table>/g)];
+    const names = tables.map((t) => t[1]);
+    assert.deepEqual(names, ["freshness", "workouts", "deliveries", "runs"], "all four tables rendered with rows");
+    const text = (s: string): string => s.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").trim();
+    for (const [, name, body] of tables) {
+      const headers = [...(body as string).matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => text(m[1] as string));
+      const rowsHtml = [...(body as string).matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].map((m) => m[1] as string).join("");
+      const trs = [...rowsHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => m[1] as string);
+      assert.ok(trs.length > 0, `${name} has rows`);
+      for (const tr of trs) {
+        const tds = [...tr.matchAll(/<td\b([^>]*)>/g)].map((m) => m[1] as string);
+        assert.equal(tds.length, headers.length, `${name}: one cell per column`);
+        tds.forEach((attrs, i) => {
+          const k = /\sdata-k="([^"]*)"/.exec(attrs)?.[1];
+          assert.ok(k !== undefined && k.length > 0, `${name} column ${i} cell has a data-k`);
+          assert.equal(k, headers[i], `${name} column ${i}: data-k equals its header`);
+        });
+      }
+    }
+  });
+});
+
+describe("both stylesheets", () => {
+  it("each carry a dark scheme, so neither page is light-only or dark-only", async () => {
+    const { FITNESS_CSS } = await import("../src/render-fitness.js");
+    for (const [name, css] of [
+      ["FITNESS_CSS", FITNESS_CSS],
+      ["DASHBOARD_CSS", DASHBOARD_CSS],
+    ] as const) {
+      assert.match(css, /@media \(prefers-color-scheme: dark\) \{\s*:root \{/, `${name} has a dark :root block`);
+    }
   });
 });
 
