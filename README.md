@@ -6,7 +6,8 @@ SQLite outside the repo and serves a loopback dashboard — activity rings, the
 week, metric cards — plus an ops page that says whether the pipe is alive.
 
 **What it needs.** Node 22 (`better-sqlite3` is built against its ABI). The
-always-on service is a macOS LaunchAgent; the suite also runs on Linux in CI.
+always-on service is a macOS LaunchAgent or, on Linux, a systemd user unit
+(see [Linux (systemd)](#linux-systemd)); the suite runs on both.
 The sender is the healthd iOS app (not yet public) — or anything that speaks
 the contract vendored in [`docs/payload.md`](docs/payload.md).
 
@@ -128,7 +129,8 @@ header value:  the contents of the file below, pasted exactly
 ```
 
 Read it with `cat "$HOME/Library/Application Support/vitals/token"` and type it
-into the phone. The file is mode `600`, minted by `npm run token:mint`, and its
+into the phone. On Linux the file is `~/.config/vitals/token` (XDG; see
+[Linux (systemd)](#linux-systemd)): `cat "${XDG_CONFIG_HOME:-$HOME/.config}/vitals/token"`. The file is mode `600`, minted by `npm run token:mint`, and its
 value appears nowhere else: not in this repo, not in a commit, not in a log line,
 not in any response body. Rotating it means re-minting and re-typing it on the
 phone — `npm run token:mint -- --force`, because without `--force` it refuses
@@ -413,6 +415,91 @@ done
 **The first deploy of this route needs one manual restart** (`npm run restart`):
 the process running before it has no `/api/restart` to call.
 
+### Linux (systemd)
+
+On Linux the same `npm run service:*`, `restart` and `service:logs` commands
+install and drive a **systemd user unit** instead of the LaunchAgent; there is
+no `lak` on this path. `scripts/service.sh` picks the platform from `uname -s`
+(Darwin → the macOS scripts above, unchanged; Linux → `scripts/linux/`).
+
+**Why a user unit, not a system unit.** The intended Linux host is a one-user
+VPS (the default in the self-host research: an Ubuntu VM driven over SSH), the
+same shape as the per-user LaunchAgent on a Mac. The store and the credential
+then live in that user's home, and install, restart, logs and uninstall need no
+root. A user unit stops at logout and does not start at boot unless the user
+*lingers*, so the installer runs `loginctl enable-linger "$USER"`; where that
+needs root it stops and prints the exact `sudo loginctl enable-linger <user>`
+line to run once. A system unit (`User=vitals`, `StateDirectory=/var/lib/vitals`)
+is not provided. Alpine/OpenRC hosts have no systemd and are not covered.
+
+Worked example, from a fresh checkout to the first delivery (node 22 on `PATH`):
+
+```bash
+git clone <this repository's URL> vitals-receiver && cd vitals-receiver
+npm ci
+npm run token:mint          # writes ~/.config/vitals/token, mode 600
+npm run service:install     # renders the unit, lingers, enables + starts it, then verifies
+npm run service:verify      # (a) unit active (b) ingest port listening (c) GET /healthz on 127.0.0.1
+# point healthd at the ingest port with the token, press Export Now, then:
+npm run deliveries          # one row per day; the first delivery shows up here
+```
+
+What it writes, and where (XDG; `VITALS_STATE_DIR`, `VITALS_DB` and
+`VITALS_TOKEN_FILE` still override, as on macOS):
+
+| what | path | mode |
+|---|---|---|
+| the unit | `${XDG_CONFIG_HOME:-~/.config}/systemd/user/vitals.service` | 644 |
+| the credential | `${XDG_CONFIG_HOME:-~/.config}/vitals/token` | 600, directory 700 |
+| the store | `${XDG_STATE_HOME:-~/.local/state}/vitals/vitals.db` | directory 700 |
+| logs | journald: `journalctl --user -u vitals` (`npm run service:logs`) | — |
+
+The unit runs node ≥ 22 by the absolute path found at install time (no `npx`)
+with the tsx loader by absolute path, `WorkingDirectory=` the checkout,
+`EnvironmentFile=-<checkout>/.env`, `VITALS_READ_HOST=127.0.0.1`,
+`Restart=on-failure` (so the exit 75 of `POST /api/restart` comes back, and
+`systemctl --user stop vitals` stays stopped) and `NoNewPrivileges=yes`.
+`ProtectSystem=strict` and `PrivateTmp=yes` are left out: in a user unit they
+need user namespaces, and that has not been measured on a real host yet. The
+installer writes the resolved store and credential paths into the unit (the
+user manager does not see a login shell's `XDG_*`), and **refuses a `.env` that
+moves `VITALS_READ_HOST` off `127.0.0.1`**, because `EnvironmentFile=` would
+override the unit's own line.
+
+Install is idempotent: a second run with nothing changed leaves the unit file
+byte-identical and does not enable, reload or restart anything.
+`npm run service:uninstall` disables and removes the unit and keeps the store
+and the credential; `bash scripts/linux/service-uninstall.sh --purge` deletes
+those too. Lingering is left on (other user services may rely on it;
+`loginctl disable-linger` turns it off).
+
+```bash
+npm run restart                         # systemctl --user restart vitals.service
+npm run service:logs                    # journalctl --user -u vitals.service -f
+systemctl --user status vitals          # state, pid, last lines
+```
+
+**Firewall.** Open the ingest port only (`4781/tcp`, e.g. `sudo ufw allow
+4781/tcp` on a LAN host), or nothing at all when a reverse proxy sits in front
+of ingest on the same box. **Never open the read port** (`4780`): it has no
+authentication of its own, and loopback is its security.
+
+**On a VPS.** The phone outside the LAN needs https (iOS App Transport
+Security), so put Caddy in front of the ingest listener only (it terminates TLS
+and proxies to `127.0.0.1:4781`; then bind ingest to loopback with
+`VITALS_INGEST_HOST=127.0.0.1` in `.env`) and reach the dashboard over SSH:
+
+```bash
+ssh -L 4780:127.0.0.1:4780 <user>@<your-vps>    # then open http://127.0.0.1:4780/ locally
+```
+
+These steps are tested two ways. `tests/linux-service.test.ts` runs install →
+install → verify (pass and each failing check) → uninstall → `--purge` on any
+OS with stub `systemctl`/`loginctl`/`journalctl` on `PATH`. The CI job
+`linux-service` (`.github/workflows/ci.yml`) runs `npm ci`, `token:mint`, the
+real `service:install` → `service:verify`, one delivery and `npm run
+deliveries`, then `service:uninstall`, under real systemd on `ubuntu-latest`.
+
 ### Running it in the foreground
 
 ```bash
@@ -436,7 +523,7 @@ non-delivery later is the exact failure this project exists to make visible.
 
 | variable | default |
 |---|---|
-| `VITALS_STATE_DIR` | `~/Library/Application Support/vitals` |
+| `VITALS_STATE_DIR` | `~/Library/Application Support/vitals` (Linux: `~/.local/state/vitals`, token in `~/.config/vitals`; see [Linux (systemd)](#linux-systemd)) |
 | `VITALS_DB` | `<state dir>/vitals.db` |
 | `VITALS_TOKEN_FILE` | `<state dir>/token` |
 | `VITALS_TOKEN_HEADER` | `x-vitals-token` |
@@ -807,6 +894,8 @@ src/render.ts      the /pipe page: HTML + CSS + hand-rolled inline SVG sparkline
 src/render-fitness.ts  the / page: rings, bars, ranges, and the stylesheet
 src/server.ts      wiring, both listen() calls, signal handling, the running sha
 scripts/           token minting, LaunchAgent template, install/uninstall/verify, demo seeding, silence check, deliveries report
+scripts/service.sh the npm service verbs, switched on `uname -s` (Darwin: the scripts above; Linux: scripts/linux/)
+scripts/linux/     the systemd user unit template and its install/uninstall/verify/restart/logs scripts
 docs/payload.md    the healthd payload contract, schemaVersion 1, vendored
 tests/fixtures/    healthd's pinned probe bytes and its worked example, verbatim
 ```

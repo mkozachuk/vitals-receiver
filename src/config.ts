@@ -74,12 +74,42 @@ function thirdRing(raw: string | undefined): "stand" | "sleep" | "off" {
   throw new Error(`VITALS_THIRD_RING: expected stand|sleep|off, got ${JSON.stringify(raw)}`);
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+/** An XDG base directory: used only when set to an absolute path (the XDG
+ *  Base Directory spec says relative values are invalid and ignored). */
+function xdgBase(raw: string | undefined, fallback: string): string {
+  return raw !== undefined && path.isAbsolute(raw) ? raw : fallback;
+}
+
+/**
+ * Where the store and the credential live when nothing says otherwise.
+ *
+ * Linux follows XDG: the store under $XDG_STATE_HOME (~/.local/state/vitals),
+ * the credential under $XDG_CONFIG_HOME (~/.config/vitals/token). An explicit
+ * VITALS_STATE_DIR keeps the old shape (store and token side by side in it).
+ * The Linux service scripts resolve their paths through this same function
+ * (scripts/linux/unit.ts), so there is no second copy of the rule to drift.
+ * Every other platform keeps the macOS layout, unchanged.
+ */
+function defaultPaths(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): { stateDir: string; tokenFile: string } {
+  if (platform === "linux") {
+    if (env.VITALS_STATE_DIR !== undefined) {
+      return { stateDir: env.VITALS_STATE_DIR, tokenFile: path.join(env.VITALS_STATE_DIR, "token") };
+    }
+    const home = os.homedir();
+    const stateHome = xdgBase(env.XDG_STATE_HOME, path.join(home, ".local", "state"));
+    const configHome = xdgBase(env.XDG_CONFIG_HOME, path.join(home, ".config"));
+    return { stateDir: path.join(stateHome, "vitals"), tokenFile: path.join(configHome, "vitals", "token") };
+  }
   const stateDir = env.VITALS_STATE_DIR ?? path.join(os.homedir(), "Library", "Application Support", "vitals");
+  return { stateDir, tokenFile: path.join(stateDir, "token") };
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Config {
+  const { stateDir, tokenFile } = defaultPaths(env, platform);
   return {
     stateDir,
     dbPath: env.VITALS_DB ?? path.join(stateDir, "vitals.db"),
-    tokenFile: env.VITALS_TOKEN_FILE ?? path.join(stateDir, "token"),
+    tokenFile: env.VITALS_TOKEN_FILE ?? tokenFile,
     tokenHeader: (env.VITALS_TOKEN_HEADER ?? "x-vitals-token").toLowerCase(),
     ingestHost: env.VITALS_INGEST_HOST ?? "0.0.0.0",
     ingestPort: num(env.VITALS_INGEST_PORT, 4781, "VITALS_INGEST_PORT"),

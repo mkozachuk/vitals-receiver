@@ -17,11 +17,11 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "token:mint": "tsx scripts/mint-token.ts",
-    "service:install": "bash scripts/service-install.sh",
-    "service:uninstall": "bash scripts/service-uninstall.sh",
-    "service:verify": "bash scripts/verify-service.sh",
-    "service:logs": "tail -f \"$HOME/Library/Logs/vitals/vitals.log\"",
-    "restart": "launchctl kickstart -k gui/$(id -u)/local.vitals.daemon"
+    "service:install": "bash scripts/service.sh install",
+    "service:uninstall": "bash scripts/service.sh uninstall",
+    "service:verify": "bash scripts/service.sh verify",
+    "service:logs": "bash scripts/service.sh logs",
+    "restart": "bash scripts/service.sh restart"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.0",

@@ -25,3 +25,44 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  # NB-774: the real systemd user unit on a real Linux host, end to end, with
+  # the README's "Linux (systemd)" commands in the same order. The unit tests
+  # stub systemctl; this job is where the unit itself is proven.
+  linux-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: user manager with lingering
+        run: |
+          sudo loginctl enable-linger "$USER"
+          uid=$(id -u)
+          for _ in $(seq 1 20); do [ -S "/run/user/$uid/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+      - name: seed the store from the demo
+        run: |
+          npm run demo -- --no-serve
+          mkdir -p "$HOME/.local/state/vitals"
+          cp "$(node -p 'require("os").tmpdir()')/vitals-demo/demo.db" "$HOME/.local/state/vitals/vitals.db"
+      - run: npm run token:mint
+      - run: npm run service:install
+      - run: npm run service:verify
+      - name: first delivery
+        run: |
+          curl -fsS -H "x-vitals-token: $(cat "$HOME/.config/vitals/token")" \
+            -H 'content-type: application/json' \
+            --data-binary @tests/fixtures/worked-example.json http://127.0.0.1:4781/ingest
+          npm run deliveries
+      - name: logs
+        if: always()
+        run: journalctl --user -u vitals.service --no-pager | tail -n 50
+      - run: npm run service:uninstall
+      - name: store and credential kept
+        run: test -s "$HOME/.local/state/vitals/vitals.db" && test -s "$HOME/.config/vitals/token"

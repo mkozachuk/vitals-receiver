@@ -1,0 +1,52 @@
+# vitals -- systemd USER unit template (Linux).
+#
+# Rendered by scripts/linux/service-install.sh into
+# ${XDG_CONFIG_HOME:-~/.config}/systemd/user/vitals.service. Placeholders,
+# each written below between double underscores:
+#   NODE_BIN    absolute path to node >= 22, chosen and proven at install
+#   NODE_DIR    the directory holding it, first on PATH
+#   REPO        absolute path to this checkout
+#   TSX         absolute path to the tsx ESM loader in the checkout's node_modules
+#   DB          the store path, resolved at install by src/config.ts
+#   TOKEN_FILE  the credential path, resolved the same way
+#
+# A user unit, not a system unit: the same shape as the macOS LaunchAgent. The
+# store and the credential live in the user's home, and restart, logs and
+# uninstall need no root. It keeps running after logout and starts at boot only
+# with lingering on (loginctl enable-linger), which the installer turns on.
+#
+# node is exec'd directly (not npm start, not npx), with the loader by absolute
+# path, so the unit owns exactly one process and SIGTERM reaches the server's
+# own drain-and-checkpoint stop.
+#
+# The store and credential paths are written in by the installer because the
+# systemd user manager does not see the login shell's XDG_* variables: without
+# them the daemon could resolve a different, empty store than the one the
+# installer checked. EnvironmentFile settings override Environment= ones, so
+# the installer refuses a .env that moves VITALS_READ_HOST off loopback.
+#
+# Hardening: NoNewPrivileges only. ProtectSystem=strict and PrivateTmp=yes need
+# user namespaces in a user unit and cannot be proven here without a real
+# systemd; the CI job linux-service is where they could be added and measured.
+
+[Unit]
+Description=vitals: receiver for healthd Apple Health exports
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO__
+ExecStart=__NODE_BIN__ --import __TSX__ __REPO__/src/server.ts
+EnvironmentFile=-__REPO__/.env
+Environment=PATH=__NODE_DIR__:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+Environment=VITALS_DB=__DB__
+Environment=VITALS_TOKEN_FILE=__TOKEN_FILE__
+Environment=VITALS_READ_HOST=127.0.0.1
+# Any non-zero exit comes back by itself, including 75 from POST /api/restart.
+# A signal stop (systemctl stop) exits 0 and stays stopped.
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
