@@ -1,3 +1,4 @@
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -28,6 +29,16 @@ export interface Config {
   /** The longest a stop waits for in-flight requests before it closes the
    *  connections still open. One number for the whole stop. */
   drainCapSeconds: number;
+  /** Ingest rate limits (src/ratelimit.ts). Each max: 0 = that counter off. */
+  rateWindowSeconds: number;
+  rateIpMax: number;
+  rateTokenMax: number;
+  rateAuthFailMax: number;
+  rateAuthFailWindowSeconds: number;
+  rateMaxKeys: number;
+  /** Whose X-Forwarded-For the ingest listener believes: nobody, loopback
+   *  peers, or the listed addresses. */
+  trustProxy: "off" | "loopback" | string[];
 }
 
 function num(raw: string | undefined, fallback: number, name: string): number {
@@ -49,6 +60,24 @@ function numOrZero(raw: string | undefined, fallback: number, name: string): num
     throw new Error(`${name}: expected a number >= 0, got ${JSON.stringify(raw)}`);
   }
   return n;
+}
+
+/** numOrZero() that also takes the word `off` for 0. */
+function limit(raw: string | undefined, fallback: number, name: string): number {
+  return raw === "off" ? 0 : numOrZero(raw, fallback, name);
+}
+
+/** off | loopback | a comma list of IP literals. Anything else fails fast:
+ *  a mistyped proxy address would silently key every client as the proxy. */
+function trustProxy(raw: string | undefined): "off" | "loopback" | string[] {
+  if (raw === undefined || raw === "" || raw === "off") return "off";
+  if (raw === "loopback") return "loopback";
+  const addresses = list(raw);
+  const bad = addresses.filter((a) => net.isIP(a) === 0);
+  if (addresses.length === 0 || bad.length > 0) {
+    throw new Error(`VITALS_TRUST_PROXY: expected off|loopback|<ip>[,<ip>...], got ${JSON.stringify(raw)}`);
+  }
+  return addresses;
 }
 
 function list(raw: string | undefined): string[] {
@@ -125,5 +154,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
     sourceNames: nameMap(env.VITALS_SOURCE_NAMES),
     autoRefreshSeconds: numOrZero(env.VITALS_AUTO_REFRESH_SECONDS, 300, "VITALS_AUTO_REFRESH_SECONDS"),
     drainCapSeconds: num(env.VITALS_DRAIN_CAP_SECONDS, 10, "VITALS_DRAIN_CAP_SECONDS"),
+    // 1200 per 60 s = 20 req/s sustained: 26x the busiest 60 s the live store
+    // has seen (45 deliveries) and above its busiest second (12) held for a
+    // whole minute. A 1000-batch backfill is ~1000 MB of uploads and cannot
+    // finish inside one window on a phone link. See src/ratelimit.ts.
+    rateWindowSeconds: num(env.VITALS_RATE_WINDOW_SECONDS, 60, "VITALS_RATE_WINDOW_SECONDS"),
+    rateIpMax: limit(env.VITALS_RATE_IP_MAX, 1200, "VITALS_RATE_IP_MAX"),
+    rateTokenMax: limit(env.VITALS_RATE_TOKEN_MAX, 1200, "VITALS_RATE_TOKEN_MAX"),
+    rateAuthFailMax: limit(env.VITALS_RATE_AUTH_FAIL_MAX, 10, "VITALS_RATE_AUTH_FAIL_MAX"),
+    rateAuthFailWindowSeconds: num(env.VITALS_RATE_AUTH_FAIL_WINDOW_SECONDS, 600, "VITALS_RATE_AUTH_FAIL_WINDOW_SECONDS"),
+    rateMaxKeys: num(env.VITALS_RATE_MAX_KEYS, 10_000, "VITALS_RATE_MAX_KEYS"),
+    trustProxy: trustProxy(env.VITALS_TRUST_PROXY),
   };
 }

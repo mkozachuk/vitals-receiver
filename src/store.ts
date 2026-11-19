@@ -2,7 +2,14 @@ import { dbFileBytes } from "./dashboard.js";
 import type { Db } from "./db.js";
 import { normaliseUuid, toUtcIso, type Envelope, type Sample } from "./envelope.js";
 
-export type Outcome = "export" | "probe" | "unauthorised" | "quarantined" | "oversize" | "unroutable";
+export type Outcome =
+  | "export"
+  | "probe"
+  | "unauthorised"
+  | "quarantined"
+  | "oversize"
+  | "unroutable"
+  | "rate-limited";
 
 export interface DeliveryRecord {
   receivedAt: string;

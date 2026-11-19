@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Config } from "./config.js";
 import { envelopeSchema, sampleSchema, SCHEMA_VERSION, type Sample } from "./envelope.js";
+import { clientKey, createRateLimiter, tokenKey, trustProxyFn, type RateLimiter, type Refusal } from "./ratelimit.js";
 import type { Store } from "./store.js";
 import { tokenMatches, type TokenSource } from "./token.js";
 
@@ -51,6 +52,13 @@ interface RequestContext {
 
 const CANONICAL_PATH = "/ingest";
 
+const limiters = new WeakMap<FastifyInstance, RateLimiter>();
+
+/** The ingest server's rate limiter, for tests that inspect its Maps. */
+export function rateLimiterOf(app: FastifyInstance): RateLimiter | undefined {
+  return limiters.get(app);
+}
+
 export function buildIngestServer(deps: IngestDeps): FastifyInstance {
   const { config, store, token } = deps;
   const log = deps.log ?? (() => {});
@@ -61,7 +69,9 @@ export function buildIngestServer(deps: IngestDeps): FastifyInstance {
   const app = Fastify({
     bodyLimit: config.maxBodyBytes,
     logger: false,
-    trustProxy: false,
+    // X-Forwarded-For counts only from a peer VITALS_TRUST_PROXY names; with
+    // the default `off`, req.ip is always the socket peer.
+    trustProxy: trustProxyFn(config.trustProxy),
   });
 
   // Take the body verbatim, whatever the Content-Type claims. We parse JSON
@@ -75,10 +85,87 @@ export function buildIngestServer(deps: IngestDeps): FastifyInstance {
     void reply.header("content-security-policy", "default-src 'none'");
   });
 
+  // Rate limits (src/ratelimit.ts), checked in onRequest: before the body is
+  // read, before routing (so the 404 handler is covered), before auth. A 429
+  // is one of the statuses healthd retries, honouring Retry-After: it delays
+  // a batch, never destroys it. A refusal writes at most one delivery row and
+  // two log lines per bucket per window, so a flood cannot fill disk or log.
+  const limiter = createRateLimiter(
+    {
+      windowMs: config.rateWindowSeconds * 1000,
+      ipMax: config.rateIpMax,
+      tokenMax: config.rateTokenMax,
+      authFailMax: config.rateAuthFailMax,
+      authFailWindowMs: config.rateAuthFailWindowSeconds * 1000,
+      maxKeys: config.rateMaxKeys,
+    },
+    (summary) => {
+      log(
+        `${new Date(summary.at).toISOString()} 429 rate-limited ${summary.kind} ${summary.name} ×${summary.refused}` +
+          ` window=${new Date(summary.windowStart).toISOString()}`,
+      );
+    },
+  );
+
+  // One clock read per request, taken in onRequest and reused for
+  // `received_at`: the limiter and the store see the same instant, and a
+  // pinned test clock advances exactly as it did before the limiter existed.
+  const arrivedAt = new WeakMap<FastifyRequest, Date>();
+  const arrival = (req: FastifyRequest): Date => arrivedAt.get(req) ?? now();
+
+  limiters.set(app, limiter);
+
+  const refuse = (req: FastifyRequest, reply: FastifyReply, refusal: Refusal): FastifyReply => {
+    if (refusal.first) {
+      const receivedAt = arrival(req).toISOString();
+      store.recordDelivery({
+        receivedAt,
+        remoteAddr: req.ip ?? null,
+        method: req.method,
+        path: req.url,
+        status: 429,
+        bytes: 0,
+        outcome: "rate-limited",
+        note: `rate-limited ${refusal.kind} ×1 first ${refusal.name}`,
+      });
+      log(
+        `${receivedAt} 429 rate-limited ${refusal.kind} ${refusal.name} ×1 first` +
+          ` retry-after=${refusal.retryAfterSeconds} from=${req.ip ?? "?"}`,
+      );
+    }
+    return reply
+      .code(429)
+      .header("retry-after", String(refusal.retryAfterSeconds))
+      .send({ ok: false, error: "rate limited" });
+  };
+
+  app.addHook("onRequest", async (req, reply) => {
+    const at = now();
+    arrivedAt.set(req, at);
+    const t = at.getTime();
+    const client = clientKey(req.ip ?? "");
+    // 1. A client that has spent its failed-auth budget is refused outright,
+    //    whatever it presents: no 401 row, no credential check.
+    // 2. Every request counts against its client.
+    const early = limiter.checkAuthBudget(client, t) ?? limiter.checkIp(client, t);
+    if (early !== null) return refuse(req, reply, early);
+    // 3. A matching credential counts against itself, wherever it comes from.
+    //    The key is its hash; the credential never becomes a Map key.
+    if (config.rateTokenMax > 0) {
+      const presented = req.headers[config.tokenHeader];
+      if (tokenMatches(token.current(), presented)) {
+        const value = (Array.isArray(presented) ? presented[0] : presented) as string;
+        const refusal = limiter.checkToken(tokenKey(value), t);
+        if (refusal !== null) return refuse(req, reply, refusal);
+      }
+    }
+    return undefined;
+  });
+
   const context = (req: FastifyRequest): RequestContext => {
     const raw = typeof req.body === "string" ? req.body : "";
     return {
-      receivedAt: now().toISOString(),
+      receivedAt: arrival(req).toISOString(),
       remoteAddr: req.ip ?? null,
       method: req.method,
       path: req.url,
@@ -131,6 +218,7 @@ export function buildIngestServer(deps: IngestDeps): FastifyInstance {
         note: ctx.headers[config.tokenHeader] === undefined ? "no credential header" : "credential mismatch",
       });
       log(`${ctx.receivedAt} 401 unauthorised bytes=${ctx.bytes} from=${ctx.remoteAddr ?? "?"}`);
+      limiter.noteAuthFailure(clientKey(req.ip ?? ""), arrival(req).getTime());
       return reply.code(401).send({ ok: false, error: "unauthorised" });
     }
 

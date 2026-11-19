@@ -167,6 +167,7 @@ this table is for you, reading the delivery log, not for the phone.
 | `200` | `{"ok":true,"stored":0,"quarantined":1}` | body is not JSON, or `schemaVersion` is not 1, or the envelope does not match | The raw bytes are kept in `quarantine`, headers minus the credential, with a reason (`unparseable-json`, `unknown-schema-version`, `bad-envelope`). Deliberately not a 4xx: see The one rule. `quarantined24h` on `/healthz` is how you find out. |
 | `401` | `{"ok":false,"error":"unauthorised"}` | credential header missing or wrong | The only non-2xx the phone will realistically hit. Logged with the remote address; counted as `unauthorised24h` and shown on the tile as `N refused 24h`. **This data is gone**: healthd drops a batch answered `401` and never retries it — fix the header in the app and re-export. |
 | `413` | `{"ok":false,"error":"payload too large"}` | body over `VITALS_MAX_BODY_BYTES` (2 MB) | Should not happen: healthd caps a batch at 1000 samples and under 1 MB. If it fires, raise the cap rather than shrug — vitals sends no `Retry-After` with it, so healthd treats it as permanent and the batch is lost. |
+| `429` | `{"ok":false,"error":"rate limited"}` + `Retry-After: <seconds>` | a client address, the credential, or an address's failed-auth budget is over its limit (see [Rate limits](#rate-limits)) | healthd retries a `429` and waits the `Retry-After` it is given: the batch is delayed, not lost. At most one delivery row (outcome `rate-limited`) per limit per window, however many requests were refused. |
 | `404` | `{"ok":false,"error":"this port accepts POST only","endpoint":"/ingest"}` | any non-POST | You, with a browser. This port has no dashboard, no `/healthz`, nothing to read. Logged with outcome `unroutable`. |
 | `500` | `{"ok":false,"error":"internal error"}` | an unexpected failure | A bug. Unlike every `200` above, **the body is not kept** — only the delivery row is. healthd retries a `5xx` with backoff for up to seven days, so the same bytes may arrive again under the same `exportId` and `batchSequence`; if the retry hits the same bug, or the seven days run out, the batch is gone. Treat it as a defect, not as weather. |
 
@@ -539,6 +540,61 @@ non-delivery later is the exact failure this project exists to make visible.
 | `VITALS_SOURCE_NAMES` | empty — `prefix=Friendly Name`, comma separated |
 | `VITALS_AUTO_REFRESH_SECONDS` | `300` — `0` switches the meta refresh off |
 | `VITALS_DRAIN_CAP_SECONDS` | `10` — the longest a stop waits for requests in flight |
+| `VITALS_RATE_WINDOW_SECONDS` | `60` — window for the per-address and per-credential limits |
+| `VITALS_RATE_IP_MAX` | `1200` — requests per window from one address; `0` or `off` switches it off |
+| `VITALS_RATE_TOKEN_MAX` | `1200` — requests per window carrying the credential; `0` or `off` switches it off |
+| `VITALS_RATE_AUTH_FAIL_MAX` | `10` — `401`s per address per auth window; `0` or `off` switches it off |
+| `VITALS_RATE_AUTH_FAIL_WINDOW_SECONDS` | `600` |
+| `VITALS_RATE_MAX_KEYS` | `10000` — entries per limiter map |
+| `VITALS_TRUST_PROXY` | `off` — or `loopback`, or a comma list of proxy IPs whose `X-Forwarded-For` is believed |
+
+### Rate limits
+
+The ingest listener counts requests in fixed windows, in memory (a restart
+resets them), and answers `429` with `Retry-After: <seconds to the window's end>`
+once a limit is spent. The check runs before the body is read and before the
+credential is checked, on every method and path.
+
+| limit | counts | default |
+|---|---|---|
+| per address | every request from one client address; IPv6 per `/64`, `::ffff:a.b.c.d` as `a.b.c.d` | `VITALS_RATE_IP_MAX=1200` per `VITALS_RATE_WINDOW_SECONDS=60` |
+| per credential | every request carrying the valid credential, from any address together | `VITALS_RATE_TOKEN_MAX=1200` per 60 s |
+| failed-auth budget | only `401` answers to one address; once spent, **everything** from that address is `429` until its window ends | `VITALS_RATE_AUTH_FAIL_MAX=10` per `VITALS_RATE_AUTH_FAIL_WINDOW_SECONDS=600` |
+
+Any of the three maxima set to `0` or `off` switches that limit off; any other
+non-number fails at startup.
+
+**Why these numbers.** 1200 per 60 s is 20 requests a second, sustained. The
+busiest minute one live store has seen was 45 deliveries and the busiest second
+12, so the default sits 26 times above the real peak minute and above the peak
+second held for a whole minute. A 1000-batch backfill is about 1000 MB of
+uploads; a phone cannot push that inside one window.
+
+**What a `429` means for the phone.** healthd treats `429` as retryable and
+honours `Retry-After`, as seconds or an HTTP date, clamped to an hour
+(`RetryDisposition.swift`, `DeliveryTransport.swift`). The batch stays in its
+outbox and is sent again: a `429` delays data, a `401` destroys it. That is why
+the failed-auth budget answers `429`, not `401`: after ten wrong-credential
+attempts from one address, a phone with a stale header sees `429` (and keeps
+retrying) instead of another `401` (and dropping the batch). Fix the header and
+its next retry after the window gets through.
+
+**The credential is never stored.** The per-credential counter is keyed by the
+SHA-256 of the presented value, and its log line and row name it as
+`token=<first 8 hex of that hash>`.
+
+**A flood costs one row.** However many requests one limit refuses in a window,
+it writes one delivery row (outcome `rate-limited`, note `rate-limited
+<ip|token|auth> ×1 first ...`) and at most two log lines: the first refusal,
+and a `×N` total when the window rolls over. Each limiter map holds at most
+`VITALS_RATE_MAX_KEYS` entries, oldest dropped first.
+
+**Behind a reverse proxy.** By default (`VITALS_TRUST_PROXY=off`) the client
+address is the socket peer and `X-Forwarded-For` is ignored, because anyone can
+send that header. If a proxy on this machine fronts the ingest port, every
+client looks like `127.0.0.1` and shares one bucket: set `loopback` (or the
+proxy's own addresses) so the forwarded address counts instead, and only for
+requests that really come from that proxy.
 
 ### Silence check
 
