@@ -139,7 +139,7 @@ describe("silence check: receiver down", () => {
     assert.equal(targetName("http://127.0.0.1:4780"), "the receiver at 127.0.0.1:4780");
     assert.equal(targetName("http://localhost:4780"), "the receiver at localhost:4780");
     assert.equal(targetName("http://[::1]:4780"), "the receiver at [::1]:4780");
-    assert.equal(targetName("http://10.0.0.7:4780"), "the receiver");
+    assert.equal(targetName("http://192.0.2.7:4780"), "the receiver");
     assert.equal(targetName("http://127.0.0.1.example.com:4780"), "the receiver");
     assert.equal(targetName("not a url"), "the receiver");
   });
