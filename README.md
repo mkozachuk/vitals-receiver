@@ -823,11 +823,10 @@ Named here as open rather than quietly defaulted:
   on its own — and it is unbounded growth. Recommendation when a policy is
   wanted: samples forever, `deliveries` pruned past 90 days, `quarantine` past 30
   with bodies capped at 256 KB.
-- **Rate limiting: none.** Anything on the LAN can POST at us all day; the cost of
-  a refused request is one `401` row. A cap belongs here eventually, and its
-  design has a trap — a limiter that starts refusing *valid* exports would
-  destroy the data it is meant to protect, so any limit must be applied after
-  authentication and never to an authenticated batch.
+- **Rate limiting: shipped — see [Rate limits](#rate-limits).** What stays open
+  is edge limiting (a proxy or CDN in front of the ingest port). The `429` after
+  a spent failed-auth budget replaces the old "after authentication, never to an
+  authenticated batch" rule: healthd retries a `429`, so no batch is lost.
 - **The 36h warn threshold, now that healthd can export unattended.** Set
   when every export was a manual tap (see *The status tile*). The condition
   this document named for revisiting it — healthd shipping background export —
