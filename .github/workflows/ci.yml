@@ -26,6 +26,59 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  # NB-775: the per-user scheduled task on a real Windows host, end to end, with
+  # the README's "Windows" commands in the same order. The unit tests check the
+  # .ps1 files as text; this job is where Windows PowerShell runs them. Install
+  # starts the task itself (Start-ScheduledTask): no logon happens on a runner.
+  windows-service:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # Golden fixtures are compared byte for byte: keep LF as committed.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - id: deps
+        run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # The service steps run even when the suite is red, so one run shows both.
+      - name: seed the store from the demo
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: |
+          npm run demo -- --no-serve
+          New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\vitals" | Out-Null
+          Copy-Item (Join-Path ([System.IO.Path]::GetTempPath()) 'vitals-demo\demo.db') "$env:LOCALAPPDATA\vitals\vitals.db"
+      - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: npm run token:mint
+      - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: npm run service:install
+      - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: npm run service:verify
+      - name: first delivery
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: |
+          $token = (Get-Content -Raw "$env:LOCALAPPDATA\vitals\token").Trim()
+          curl.exe -fsS -H "x-vitals-token: $token" -H 'content-type: application/json' --data-binary '@tests/fixtures/worked-example.json' http://127.0.0.1:4781/ingest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run deliveries
+      - name: logs
+        if: always()
+        run: Get-Content -Tail 50 "$env:LOCALAPPDATA\vitals\logs\vitals.log" -ErrorAction SilentlyContinue
+      - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: npm run service:uninstall
+      - name: store and credential kept
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: |
+          if (-not ((Get-Item "$env:LOCALAPPDATA\vitals\vitals.db").Length -gt 0)) { exit 1 }
+          if (-not ((Get-Item "$env:LOCALAPPDATA\vitals\token").Length -gt 0)) { exit 1 }
+
   # NB-774: the real systemd user unit on a real Linux host, end to end, with
   # the README's "Linux (systemd)" commands in the same order. The unit tests
   # stub systemctl; this job is where the unit itself is proven.
@@ -66,3 +119,4 @@ jobs:
       - run: npm run service:uninstall
       - name: store and credential kept
         run: test -s "$HOME/.local/state/vitals/vitals.db" && test -s "$HOME/.config/vitals/token"
+

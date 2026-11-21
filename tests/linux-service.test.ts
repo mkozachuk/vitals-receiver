@@ -487,11 +487,11 @@ describe("scripts/service.sh dispatches on uname -s", () => {
 
   it("package.json routes every service verb through the wrapper", () => {
     const scripts = (JSON.parse(fs.readFileSync(path.join(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
-    assert.equal(scripts["service:install"], "bash scripts/service.sh install");
-    assert.equal(scripts["service:uninstall"], "bash scripts/service.sh uninstall");
-    assert.equal(scripts["service:verify"], "bash scripts/service.sh verify");
-    assert.equal(scripts["service:logs"], "bash scripts/service.sh logs");
-    assert.equal(scripts.restart, "bash scripts/service.sh restart");
+    assert.equal(scripts["service:install"], "node scripts/service.mjs install");
+    assert.equal(scripts["service:uninstall"], "node scripts/service.mjs uninstall");
+    assert.equal(scripts["service:verify"], "node scripts/service.mjs verify");
+    assert.equal(scripts["service:logs"], "node scripts/service.mjs logs");
+    assert.equal(scripts.restart, "node scripts/service.mjs restart");
   });
 });
 

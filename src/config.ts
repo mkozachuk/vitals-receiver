@@ -120,6 +120,15 @@ function xdgBase(raw: string | undefined, fallback: string): string {
  * Every other platform keeps the macOS layout, unchanged.
  */
 function defaultPaths(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): { stateDir: string; tokenFile: string } {
+  if (platform === "win32") {
+    // Store and credential side by side under %LOCALAPPDATA%\vitals (<home>\AppData\Local
+    // when LOCALAPPDATA is unset). scripts/windows/paths.ts reads them from here.
+    const localAppData = env.LOCALAPPDATA !== undefined && env.LOCALAPPDATA !== ""
+      ? env.LOCALAPPDATA
+      : path.win32.join(os.homedir(), "AppData", "Local");
+    const stateDir = env.VITALS_STATE_DIR ?? path.win32.join(localAppData, "vitals");
+    return { stateDir, tokenFile: path.win32.join(stateDir, "token") };
+  }
   if (platform === "linux") {
     if (env.VITALS_STATE_DIR !== undefined) {
       return { stateDir: env.VITALS_STATE_DIR, tokenFile: path.join(env.VITALS_STATE_DIR, "token") };

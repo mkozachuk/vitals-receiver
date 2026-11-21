@@ -501,6 +501,114 @@ OS with stub `systemctl`/`loginctl`/`journalctl` on `PATH`. The CI job
 real `service:install` → `service:verify`, one delivery and `npm run
 deliveries`, then `service:uninstall`, under real systemd on `ubuntu-latest`.
 
+### Windows
+
+**Untested on real Windows until the CI job `windows-service` is green.**
+
+On Windows the same `npm run service:*`, `restart` and `service:logs` commands
+drive a **per-user scheduled task** that starts at logon. `package.json` runs
+`node scripts/service.mjs <verb>`; on Windows that runs
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\<script>.ps1`,
+everywhere else `bash scripts/service.sh <verb>` exactly as above. The scripts
+are written for the Windows PowerShell 5.1 that ships with Windows 10 and 11;
+PowerShell 7 is not needed.
+
+**Why Task Scheduler.** It needs no administrator rights, nothing is
+downloaded, it is built into every Windows 10/11, and it has the same per-user
+shape as the macOS LaunchAgent and the Linux user unit. The cost: the task runs
+only while that user is logged on. It starts at logon, stops at logoff, and
+does not run at boot before anyone logs on. For an always-on PC that logs its
+user on automatically, that is enough; setting up auto-logon is not covered
+here. To run at boot with nobody logged on, wrap the same command line in a
+real Windows service instead; WinSW is the alternative named below, and it is
+not built here.
+
+| mechanism | admin needed | runs at boot | download | licence | maintenance | URL |
+|---|---|---|---|---|---|---|
+| Task Scheduler (**default**) | no | no: at logon of the user | none, built into Windows | part of Windows | maintained by Microsoft | https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/register-scheduledtask |
+| WinSW (**alternative**) | yes | yes, a real service | one `.exe`, checked against the release checksum | MIT | release v2.13.0, published 2026-11-15 | https://github.com/winsw/winsw |
+| NSSM | yes | yes, a real service | one `.exe`, no published checksum | public domain | last release 2.24, from 2014; unmaintained | https://nssm.cc/ |
+| node-windows | yes | yes (it wraps WinSW) | an npm package that downloads WinSW | MIT | latest `1.0.0-beta.8`, registry modified 2024-10-22 | https://registry.npmjs.org/node-windows |
+
+Worked example, from a fresh checkout to the first delivery, in PowerShell:
+
+```powershell
+# Node 22 from https://nodejs.org/en/download (better-sqlite3 is built against its ABI)
+git clone <this repository's URL> vitals-receiver
+cd vitals-receiver
+npm ci
+npm run token:mint          # writes %LOCALAPPDATA%\vitals\token
+npm run service:install     # restricts the ACLs, registers + starts the task, then verifies
+npm run service:verify      # (a) task running (b) ingest port listening (c) GET /healthz (d) credential ACL
+```
+
+Then, in an **administrator** PowerShell, open the ingest port to the private
+network only:
+
+```powershell
+New-NetFirewallRule -DisplayName "vitals ingest" -Direction Inbound -Protocol TCP -LocalPort 4781 -Action Allow -Profile Private
+```
+
+Nothing opens the read port 4780: it has no authentication of its own, and
+loopback is its security. Point healthd at `http://<pc LAN IP>:4781` with the
+token (plain http works on the LAN only; anything else needs https for iOS App
+Transport Security), press Export Now, and the first delivery shows up in
+`npm run deliveries`. The dashboard is `http://127.0.0.1:4780` on the PC itself.
+
+What it writes, and where (`VITALS_STATE_DIR`, `VITALS_DB` and
+`VITALS_TOKEN_FILE` still override, as on macOS and Linux; with `LOCALAPPDATA`
+unset the base is `<home>\AppData\Local`):
+
+| what | path | access |
+|---|---|---|
+| the task | Task Scheduler, task `vitals` (`Get-ScheduledTask vitals`) | the user's own |
+| the credential | `%LOCALAPPDATA%\vitals\token` | the user only |
+| the store | `%LOCALAPPDATA%\vitals\vitals.db` | the user only (directory) |
+| logs | `%LOCALAPPDATA%\vitals\logs\vitals.log` (`npm run service:logs`) | the user only (directory) |
+
+Install cuts the inherited permissions so that only the running user can read
+the credential and the state directory:
+
+```powershell
+icacls "$env:LOCALAPPDATA\vitals\token" /inheritance:r /grant:r "<DOMAIN\user>:(R,W)"
+icacls "$env:LOCALAPPDATA\vitals" /inheritance:r /grant:r "<DOMAIN\user>:(OI)(CI)F"
+```
+
+and `npm run service:verify` fails check (d) if `icacls` lists any other
+principal on the credential (Everyone, Users, Authenticated Users,
+BUILTIN\Users, SYSTEM, Administrators).
+
+The task runs `powershell.exe ... -File scripts\windows\run.ps1` with node ≥ 22
+by the absolute path found at install time (no `npx`) and the tsx loader by
+absolute path. `run.ps1` is a supervising loop, because Task Scheduler does not
+reliably re-run an action that exits non-zero: exit 75 (`POST /api/restart`)
+starts node again at once; exit 0 ends the loop; any other exit waits 10 s and
+starts again, and after 5 such restarts within 10 minutes it gives up (exit 1,
+the reason in the log). node reads the checkout's `.env` through `--env-file`,
+but `run.ps1` sets `VITALS_READ_HOST=127.0.0.1` in the environment, which a
+`.env` cannot override; install **refuses a `.env` that moves
+`VITALS_READ_HOST` off `127.0.0.1`**, as on Linux.
+
+Install is idempotent: a second run with nothing changed leaves the registered
+task as it is. `npm run service:uninstall` stops and unregisters the task and
+keeps the store, the credential and the log; `npm run service:uninstall --
+-Purge` deletes those too.
+
+```powershell
+npm run restart                         # POST /api/restart, waits for a new startedAt
+npm run service:logs                    # Get-Content -Wait on the log file
+Get-ScheduledTask vitals                # state
+```
+
+These steps are tested two ways. `tests/windows-service.test.ts` runs on any
+OS with no PowerShell: the dispatcher per platform, the `.ps1` files against
+the PowerShell 5.1 subset (encoding, no PowerShell 7-only syntax, every cmdlet
+on an allow-list), `run.ps1`'s restart policy through its mirror
+`scripts/windows/policy.ts`, the loopback rule and the paths. The CI job
+`windows-service` (`.github/workflows/ci.yml`) runs `npm ci`, the suite,
+`token:mint`, the real `service:install` → `service:verify`, one delivery and
+`npm run deliveries`, then `service:uninstall`, on `windows-latest`.
+
 ### Running it in the foreground
 
 ```bash
@@ -949,8 +1057,10 @@ src/render.ts      the /pipe page: HTML + CSS + hand-rolled inline SVG sparkline
 src/render-fitness.ts  the / page: rings, bars, ranges, and the stylesheet
 src/server.ts      wiring, both listen() calls, signal handling, the running sha
 scripts/           token minting, LaunchAgent template, install/uninstall/verify, demo seeding, silence check, deliveries report
+scripts/service.mjs the npm service verbs: Windows -> scripts/windows/, everything else -> scripts/service.sh
 scripts/service.sh the npm service verbs, switched on `uname -s` (Darwin: the scripts above; Linux: scripts/linux/)
 scripts/linux/     the systemd user unit template and its install/uninstall/verify/restart/logs scripts
+scripts/windows/   the scheduled task: install/uninstall/verify/restart/logs, run.ps1's restart loop, paths
 docs/payload.md    the healthd payload contract, schemaVersion 1, vendored
 tests/fixtures/    healthd's pinned probe bytes and its worked example, verbatim
 ```
