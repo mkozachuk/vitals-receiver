@@ -957,9 +957,14 @@ Named here as open rather than quietly defaulted:
   clear. Accepted for v1 because the endpoint is LAN-only, write-only, and behind
   the same trust boundary as the other services on a home LAN.
   **Reversal condition:** the day this needs to work off the LAN, or the network
-  gains devices its owner does not control, it moves onto Tailscale rather than
-  growing a certificate — and at that point the ingest listener should bind the
-  tailnet interface instead of `0.0.0.0`.
+  gains devices its owner does not control, ingest moves behind https that ends
+  on the receiver's own box: Caddy with an automatic certificate on an
+  `sslip.io`/`nip.io` name (**Recommended**), or Tailscale Funnel. The ingest
+  listener then binds `127.0.0.1` (`VITALS_INGEST_HOST=127.0.0.1`) behind that
+  local TLS front. Tailscale alone does not do it: iOS refuses plain http to a
+  tailnet address in `100.64.0.0/10`. A third-party front (Cloudflare Tunnel, a
+  mikr.us subdomain, ngrok) is only a warned convenience option, because that
+  provider sees the health data and the token in clear.
 
 ---
 
