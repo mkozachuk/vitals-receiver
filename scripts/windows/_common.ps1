@@ -75,7 +75,7 @@ function ReadPaths([string]$Node) {
 # so a second install with nothing changed leaves the running task alone.
 function TaskArguments([string]$Node, $P) {
   return '-WindowStyle Hidden -NonInteractive -NoProfile -ExecutionPolicy Bypass -File "' + $RunPs1 + '"' +
-    ' -Node "' + $Node + '" -Db "' + $P.DB + '" -Token "' + $P.TOKEN_FILE + '" -Log "' + $P.LOG_FILE + '"'
+    ' -Node "' + $Node + '" -Store "' + $P.DB + '" -Token "' + $P.TOKEN_FILE + '" -Log "' + $P.LOG_FILE + '"'
 }
 
 function WindowsPowerShell {

@@ -265,6 +265,26 @@ describe("windows service: run.ps1 restart policy", () => {
     assert.deepEqual([RESTART_EXIT, BACKOFF_SECONDS, MAX_RESTARTS, WINDOW_SECONDS], [75, 10, 5, 600]);
   });
 
+  it("run.ps1's parameters clash with no common parameter or its alias", () => {
+    // An advanced script ([Parameter()] in param) gets the common parameters.
+    // A name equal to one of them or to an alias (-db is -Debug) makes Windows
+    // PowerShell refuse to bind the script: the task's action exits 1 before
+    // its first line (NB-842, task event 201 return code 2147942401).
+    const common = [
+      "Verbose", "vb", "Debug", "db", "ErrorAction", "ea", "WarningAction", "wa",
+      "InformationAction", "infa", "ProgressAction", "proga", "ErrorVariable", "ev",
+      "WarningVariable", "wv", "InformationVariable", "iv", "OutVariable", "ov",
+      "OutBuffer", "ob", "PipelineVariable", "pv",
+    ].map((n) => n.toLowerCase());
+    const run = ps1("run.ps1");
+    const block = run.slice(run.indexOf("param("), run.indexOf("\r\n)\r\n"));
+    const names = [...block.matchAll(/\][ \t]*\$([A-Za-z_]\w*)/g)].map((m) => m[1] as string);
+    assert.deepEqual(names, ["Node", "Store", "Token", "Log"]);
+    for (const n of names) assert.ok(!common.includes(n.toLowerCase()), `run.ps1 -${n} clashes with a common parameter`);
+    const fn = ps1("_common.ps1");
+    for (const n of names) assert.match(fn, new RegExp(`' -${n} "' \\+|'" -${n} "' \\+`), `TaskArguments passes -${n}`);
+  });
+
   it("run.ps1 carries the same constants and comparisons as the mirror", () => {
     const run = ps1("run.ps1");
     assert.match(run, new RegExp(`^\\$RestartExit = ${RESTART_EXIT}\\r$`, "m"));

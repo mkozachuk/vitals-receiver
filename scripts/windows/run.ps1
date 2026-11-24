@@ -1,7 +1,7 @@
 # The scheduled task's action: a supervising loop around one node process.
 #
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\run.ps1
-#     -Node <node.exe> -Db <store> -Token <credential> -Log <log file>
+#     -Node <node.exe> -Store <store> -Token <credential> -Log <log file>
 #
 # Task Scheduler does not reliably re-run an action that exits non-zero, so the
 # restart policy lives here (mirrored in scripts/windows/policy.ts, which the
@@ -18,7 +18,9 @@
 # appended to the log file.
 param(
   [Parameter(Mandatory = $true)][string]$Node,
-  [Parameter(Mandatory = $true)][string]$Db,
+  # Not -Db: an advanced script gets the common parameters, and -db is the
+  # alias of -Debug, so Windows PowerShell refuses to bind the script at all.
+  [Parameter(Mandatory = $true)][string]$Store,
   [Parameter(Mandatory = $true)][string]$Token,
   [Parameter(Mandatory = $true)][string]$Log
 )
@@ -50,7 +52,7 @@ $BackoffSeconds = 10
 $MaxRestarts = 5
 $WindowSeconds = 600
 
-$env:VITALS_DB = $Db
+$env:VITALS_DB = $Store
 $env:VITALS_TOKEN_FILE = $Token
 $env:VITALS_READ_HOST = '127.0.0.1'
 $env:NODE_ENV = 'production'
