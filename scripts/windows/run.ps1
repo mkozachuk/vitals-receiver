@@ -22,7 +22,28 @@ param(
   [Parameter(Mandatory = $true)][string]$Token,
   [Parameter(Mandatory = $true)][string]$Log
 )
+# Nobody reads this process's console: anything that stops the script before
+# the loop goes to the log file too, with the line it came from.
+function Early([string]$Line) {
+  $text = (Get-Date -Format 's') + ' run.ps1: ' + $Line
+  [Console]::Error.WriteLine($text)
+  try {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Log) | Out-Null
+    Add-Content -LiteralPath $Log -Encoding ASCII -Value $text
+  } catch {
+    [Console]::Error.WriteLine('run.ps1: cannot write ' + $Log + ': ' + [string]$_)
+  }
+}
+trap {
+  Early ('stopped: ' + [string]$_ + ' at ' + $_.InvocationInfo.ScriptName + ':' + $_.InvocationInfo.ScriptLineNumber)
+  exit 1
+}
+Early ('started as ' + [System.Security.Principal.WindowsIdentity]::GetCurrent().Name + ' in ' + [string]$PWD.Path)
 . (Join-Path $PSScriptRoot '_common.ps1')
+function Fail([string]$Message) {
+  Early $Message
+  exit 1
+}
 
 $RestartExit = 75
 $BackoffSeconds = 10

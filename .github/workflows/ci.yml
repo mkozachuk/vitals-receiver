@@ -57,6 +57,12 @@ jobs:
           Copy-Item (Join-Path ([System.IO.Path]::GetTempPath()) 'vitals-demo\demo.db') "$env:LOCALAPPDATA\vitals\vitals.db"
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run token:mint
+      # NB-842 B1: Task Scheduler's own history is off by default; the
+      # diagnostics below read it.
+      - name: task scheduler history on
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        continue-on-error: true
+        run: wevtutil set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run service:install
       # NB-842 B1: what Task Scheduler holds and did. Read-only; never decides
@@ -71,6 +77,7 @@ jobs:
             $t.Actions | Format-List Execute, Arguments, WorkingDirectory
             $t.Principal | Format-List UserId, LogonType, RunLevel
             $t.Triggers | Format-List *
+            Export-ScheduledTask -TaskName vitals
             $i = Get-ScheduledTaskInfo -TaskName vitals
             'LastTaskResult: {0} (0x{1:X8})' -f $i.LastTaskResult, [uint32]$i.LastTaskResult
             'LastRunTime: ' + $i.LastRunTime + '   NumberOfMissedRuns: ' + $i.NumberOfMissedRuns
@@ -107,6 +114,7 @@ jobs:
             $t.Actions | Format-List Execute, Arguments, WorkingDirectory
             $t.Principal | Format-List UserId, LogonType, RunLevel
             $t.Triggers | Format-List *
+            Export-ScheduledTask -TaskName vitals
             $i = Get-ScheduledTaskInfo -TaskName vitals
             'LastTaskResult: {0} (0x{1:X8})' -f $i.LastTaskResult, [uint32]$i.LastTaskResult
             'LastRunTime: ' + $i.LastRunTime + '   NumberOfMissedRuns: ' + $i.NumberOfMissedRuns
