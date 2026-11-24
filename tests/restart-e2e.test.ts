@@ -131,7 +131,7 @@ class Supervisor {
 }
 
 describe("restart, end to end on a real process (RC4, RC5, RC6)", () => {
-  it("replies, exits 75 through the normal stop, frees its ports, relaunches on the new commit", { timeout: 30_000 }, async () => {
+  it("replies, exits 75 through the normal stop, frees its ports, relaunches on the new commit", { timeout: 30_000, skip: process.platform === "win32" && "POSIX signals: SIGTERM to a child process (step 6)" }, async () => {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vitals-nb481-e2e-")));
     const repo = path.join(tmp, "repo");
     const wt = path.join(tmp, "wt");

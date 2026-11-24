@@ -132,6 +132,7 @@ const CMDLETS = [
   "Get-Item",
   "Get-NetTCPConnection",
   "Get-ScheduledTask",
+  "Get-ScheduledTaskInfo",
   "Invoke-WebRequest",
   "Join-Path",
   "New-Item",
@@ -310,7 +311,8 @@ describe("windows service: the read listener stays on loopback", () => {
     const repo = tempRepo("VITALS_READ_HOST=0.0.0.0\n");
     const tsx = path.join(REPO, "node_modules", "tsx", "dist", "loader.mjs");
     const r = await new Promise<{ code: number | null; err: string }>((resolve) => {
-      execFile(process.execPath, ["--import", tsx, path.join(WIN, "paths.ts"), repo], (error, _out, err) => {
+      // --import takes a URL: a bare D:\\ path reads as a URL scheme on Windows.
+      execFile(process.execPath, ["--import", pathToFileURL(tsx).href, path.join(WIN, "paths.ts"), repo], (error, _out, err) => {
         resolve({ code: error === null ? 0 : typeof error.code === "number" ? error.code : null, err: String(err) });
       });
     });

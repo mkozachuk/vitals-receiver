@@ -211,7 +211,7 @@ async function assertCleanCappedStop(d: Daemon): Promise<void> {
 }
 
 describe("the drain cap on a real process", () => {
-  it("a held upload and SIGTERM: closed at the cap, exit 0, nothing half-written", BOUND, async () => {
+  it("a held upload and SIGTERM: closed at the cap, exit 0, nothing half-written", { ...BOUND, skip: process.platform === "win32" && "POSIX signals: SIGTERM to a child process" }, async () => {
     await withDaemon("0.5", async (d) => {
       const held = await holdUpload(d);
       const signalledAt = Date.now();
@@ -241,7 +241,7 @@ describe("the drain cap on a real process", () => {
     });
   });
 
-  it("an upload finished during the stop: committed, answered, and it does not hold the drain", BOUND, async () => {
+  it("an upload finished during the stop: committed, answered, and it does not hold the drain", { ...BOUND, skip: process.platform === "win32" && "POSIX signals: SIGTERM to a child process" }, async () => {
     await withDaemon(undefined, async (d) => {
       const held = await holdUpload(d);
       d.child.kill("SIGTERM");

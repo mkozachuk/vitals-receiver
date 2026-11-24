@@ -127,7 +127,7 @@ describe("config paths on linux (XDG) and darwin (unchanged)", () => {
     assert.equal(c.tokenFile, path.join(home, ".config", "vitals", "token"));
   });
 
-  it("linux honours absolute XDG_STATE_HOME / XDG_CONFIG_HOME and ignores relative ones", () => {
+  it("linux honours absolute XDG_STATE_HOME / XDG_CONFIG_HOME and ignores relative ones", { skip: process.platform === "win32" && "POSIX absolute paths: expected values are written with / separators" }, () => {
     const c = loadConfig({ XDG_STATE_HOME: "/x/state", XDG_CONFIG_HOME: "/x/config" }, "linux");
     assert.equal(c.dbPath, "/x/state/vitals/vitals.db");
     assert.equal(c.tokenFile, "/x/config/vitals/token");
@@ -136,7 +136,7 @@ describe("config paths on linux (XDG) and darwin (unchanged)", () => {
     assert.equal(r.tokenFile, path.join(home, ".config", "vitals", "token"));
   });
 
-  it("explicit VITALS_STATE_DIR / VITALS_DB / VITALS_TOKEN_FILE still win on linux", () => {
+  it("explicit VITALS_STATE_DIR / VITALS_DB / VITALS_TOKEN_FILE still win on linux", { skip: process.platform === "win32" && "POSIX absolute paths: expected values are written with / separators" }, () => {
     const xdg = { XDG_STATE_HOME: "/x/state", XDG_CONFIG_HOME: "/x/config" };
     const s = loadConfig({ ...xdg, VITALS_STATE_DIR: "/srv/v" }, "linux");
     assert.equal(s.dbPath, "/srv/v/vitals.db");
@@ -146,7 +146,7 @@ describe("config paths on linux (XDG) and darwin (unchanged)", () => {
     assert.equal(e.tokenFile, "/t/token");
   });
 
-  it("darwin is byte-identical to the macOS layout, XDG ignored", () => {
+  it("darwin is byte-identical to the macOS layout, XDG ignored", { skip: process.platform === "win32" && "POSIX absolute paths: expected values are written with / separators" }, () => {
     const base = path.join(home, "Library", "Application Support", "vitals");
     const c = loadConfig({ XDG_STATE_HOME: "/x/state", XDG_CONFIG_HOME: "/x/config" }, "darwin");
     assert.equal(c.stateDir, base);
@@ -298,7 +298,7 @@ const UNINSTALL = path.join(LINUX, "service-uninstall.sh");
 const ports = (p: { read: number; ingest: number }) => ({ VITALS_READ_PORT: String(p.read), VITALS_INGEST_PORT: String(p.ingest) });
 
 describe("linux scripts: install -> install -> verify -> uninstall -> uninstall --purge", () => {
-  it("runs the whole lifecycle against stubs, idempotently, keeping data until --purge", async () => {
+  it("runs the whole lifecycle against stubs, idempotently, keeping data until --purge", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     mintFake(b);
     const p = await daemon();
@@ -358,7 +358,7 @@ describe("linux scripts: install -> install -> verify -> uninstall -> uninstall 
     assert.ok(!fs.existsSync(b.db) && !fs.existsSync(b.token), "store and credential purged");
   });
 
-  it("install refuses node older than 22, naming the version", async () => {
+  it("install refuses node older than 22, naming the version", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     mintFake(b);
     const old = path.join(b.root, "node20");
@@ -370,7 +370,7 @@ describe("linux scripts: install -> install -> verify -> uninstall -> uninstall 
     assert.deepEqual(r.calls.filter((c) => c.startsWith("systemctl") || c.startsWith("loginctl")), []);
   });
 
-  it("install refuses without a credential, before touching systemd", async () => {
+  it("install refuses without a credential, before touching systemd", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     const r = await sh(b, INSTALL);
     assert.notEqual(r.code, 0);
@@ -378,7 +378,7 @@ describe("linux scripts: install -> install -> verify -> uninstall -> uninstall 
     assert.deepEqual(r.calls.filter((c) => c.startsWith("systemctl") || c.startsWith("loginctl")), []);
   });
 
-  it("install refuses a .env that moves the read listener off loopback", async () => {
+  it("install refuses a .env that moves the read listener off loopback", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     mintFake(b);
     // The scripts read <checkout>/.env; run a copy of scripts/ beside a symlinked node_modules.
@@ -395,7 +395,7 @@ describe("linux scripts: install -> install -> verify -> uninstall -> uninstall 
     assert.ok(!fs.existsSync(b.unitFile));
   });
 
-  it("install exits non-zero with the sudo line when lingering is refused", async () => {
+  it("install exits non-zero with the sudo line when lingering is refused", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     mintFake(b);
     fs.writeFileSync(path.join(b.stub, "linger-denied"), "");
@@ -415,7 +415,7 @@ describe("linux verify: each failing check is named", () => {
     return { b, p: await daemon(healthOk) };
   }
 
-  it("(a) unit not active", async () => {
+  it("(a) unit not active", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const { b, p } = await ready();
     fs.writeFileSync(path.join(b.stub, "active"), "failed\n");
     const r = await sh(b, VERIFY, [], ports(p));
@@ -423,21 +423,21 @@ describe("linux verify: each failing check is named", () => {
     assert.match(r.out, /FAIL {2}\(a\) systemctl --user is-active vitals: failed/);
   });
 
-  it("(b) nothing on the ingest port", async () => {
+  it("(b) nothing on the ingest port", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const { b, p } = await ready();
     const r = await sh(b, VERIFY, [], { ...ports(p), VITALS_INGEST_PORT: String(await deadPort()) });
     assert.equal(r.code, 1, r.out);
     assert.match(r.out, /FAIL {2}\(b\) ingest port \d+: nothing is listening/);
   });
 
-  it("(c) read health not ok", async () => {
+  it("(c) read health not ok", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const { b, p } = await ready(false);
     const r = await sh(b, VERIFY, [], ports(p));
     assert.equal(r.code, 1, r.out);
     assert.match(r.out, /FAIL {2}\(c\) GET http:\/\/127\.0\.0\.1:\d+\/healthz did not answer ok/);
   });
 
-  it("(e) credential mode wrong", async () => {
+  it("(e) credential mode wrong", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const { b, p } = await ready();
     fs.chmodSync(b.token, 0o644);
     const r = await sh(b, VERIFY, [], ports(p));
@@ -451,7 +451,7 @@ describe("linux verify: each failing check is named", () => {
 describe("scripts/service.sh dispatches on uname -s", () => {
   const SERVICE = path.join(REPO, "scripts", "service.sh");
 
-  it("Linux: restart and logs go to systemctl / journalctl --user", async () => {
+  it("Linux: restart and logs go to systemctl / journalctl --user", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     const r1 = await sh(b, SERVICE, ["restart"]);
     assert.equal(r1.code, 0, r1.out);
@@ -461,14 +461,14 @@ describe("scripts/service.sh dispatches on uname -s", () => {
     assert.ok(r2.calls.includes("journalctl --user -u vitals.service -f"), JSON.stringify(r2.calls));
   });
 
-  it("Linux: uninstall runs scripts/linux/service-uninstall.sh", async () => {
+  it("Linux: uninstall runs scripts/linux/service-uninstall.sh", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     const r = await sh(b, SERVICE, ["uninstall"]);
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /no unit at .*\/systemd\/user\/vitals\.service/);
   });
 
-  it("Darwin: the macOS scripts run unchanged (here: lak missing, nothing touched)", async () => {
+  it("Darwin: the macOS scripts run unchanged (here: lak missing, nothing touched)", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     fs.writeFileSync(path.join(b.stub, "uname"), "Darwin\n");
     const r = await sh(b, SERVICE, ["uninstall"]);
@@ -477,7 +477,7 @@ describe("scripts/service.sh dispatches on uname -s", () => {
     assert.deepEqual(r.calls.filter((c) => !c.startsWith("uname")), []);
   });
 
-  it("anything else exits 2 naming the OS", async () => {
+  it("anything else exits 2 naming the OS", { skip: process.platform === "win32" && "bash scripts/linux/*.sh and service.sh: POSIX shell, stubs and file modes" }, async () => {
     const b = box();
     fs.writeFileSync(path.join(b.stub, "uname"), "Plan9\n");
     const r = await sh(b, SERVICE, ["install"]);

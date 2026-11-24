@@ -52,8 +52,10 @@ function run(env: { home: string; bin: string; lak?: string }) {
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
+const POSIX_SHELL = process.platform === "win32" && "bash scripts/_lak.sh: POSIX shell and file modes";
+
 describe("scripts/_lak.sh: finding lak", () => {
-  it("uses $LAK when it names an executable file", () => {
+  it("uses $LAK when it names an executable file", { skip: POSIX_SHELL }, () => {
     const s = sandbox();
     const lak = plant(path.join(s.home, "kit", "lak"), 0o755);
     const r = run({ ...s, lak });
@@ -62,7 +64,7 @@ describe("scripts/_lak.sh: finding lak", () => {
     assert.equal(r.stderr, "");
   });
 
-  it("falls back to `lak` on PATH when $LAK is unset", () => {
+  it("falls back to `lak` on PATH when $LAK is unset", { skip: POSIX_SHELL }, () => {
     const s = sandbox();
     const lak = plant(path.join(s.bin, "lak"), 0o755);
     const r = run(s);
@@ -70,7 +72,7 @@ describe("scripts/_lak.sh: finding lak", () => {
     assert.equal(r.stdout, lak);
   });
 
-  it("exits 1 naming LAK when there is neither, and ignores a lak under HOME", () => {
+  it("exits 1 naming LAK when there is neither, and ignores a lak under HOME", { skip: POSIX_SHELL }, () => {
     const s = sandbox();
     // The old default location, rebuilt from parts so no shipped file spells
     // out a home-relative path (the publishing sweep checks for that).
@@ -84,7 +86,7 @@ describe("scripts/_lak.sh: finding lak", () => {
     assert.ok(!r.stderr.includes(planted), "the planted file is not named, so not used");
   });
 
-  it("exits 1 when $LAK names a file that is not executable", () => {
+  it("exits 1 when $LAK names a file that is not executable", { skip: POSIX_SHELL }, () => {
     const s = sandbox();
     const lak = plant(path.join(s.home, "kit", "lak"), 0o644);
     plant(path.join(s.bin, "lak"), 0o755); // a good one on PATH does not rescue a bad $LAK
