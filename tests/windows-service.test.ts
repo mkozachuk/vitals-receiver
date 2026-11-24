@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, describe, it } from "node:test";
 import { loadConfig } from "../src/config.js";
 import { windowsPaths } from "../scripts/windows/paths.js";
+import { decideAcl, principalsOf } from "../scripts/windows/acl.js";
 import { BACKOFF_SECONDS, decide, MAX_RESTARTS, RESTART_EXIT, WINDOW_SECONDS } from "../scripts/windows/policy.js";
 
 /**
@@ -482,6 +483,76 @@ describe("windows service: the scheduled task", () => {
       "exit $fails",
     ]) {
       assert.ok(v.includes(want) || ps1("_common.ps1").includes(want), want);
+    }
+  });
+});
+
+describe("windows service: verify check (d) credential ACL (NB-847)", () => {
+  const tokenPath = "C:\\Users\\runneradmin\\AppData\\Local\\vitals\\token";
+  const me = "DESKTOP-X\\alice";
+  const pad = " ".repeat(tokenPath.length + 1);
+  const tail = ["", "Successfully processed 1 files; Failed processing 0 files"];
+
+  it("only me -> ok", () => {
+    const lines = [`${tokenPath} ${me}:(F)`, ...tail];
+    assert.deepEqual(decideAcl(lines, tokenPath, me), { kind: "ok" });
+  });
+
+  it("me + SYSTEM -> others [SYSTEM]", () => {
+    const lines = [`${tokenPath} ${me}:(F)`, `${pad}NT AUTHORITY\\SYSTEM:(I)(F)`, ...tail];
+    assert.deepEqual(decideAcl(lines, tokenPath, me), { kind: "others", others: ["NT AUTHORITY\\SYSTEM"] });
+  });
+
+  it("me + Administrators + Users -> both, in order", () => {
+    const lines = [
+      `${tokenPath} ${me}:(F)`,
+      `${pad}BUILTIN\\Administrators:(I)(F)`,
+      `${pad}BUILTIN\\Users:(I)(RX)`,
+      ...tail,
+    ];
+    assert.deepEqual(decideAcl(lines, tokenPath, me), {
+      kind: "others",
+      others: ["BUILTIN\\Administrators", "BUILTIN\\Users"],
+    });
+  });
+
+  it("first row path-prefixed, later rows indented: all principals, trimmed, no path", () => {
+    const lines = [`${tokenPath} ${me}:(F)`, `${pad}BUILTIN\\Users:(I)(RX)`, ...tail];
+    assert.deepEqual(principalsOf(lines, tokenPath), [me, "BUILTIN\\Users"]);
+  });
+
+  it("empty and garbage output -> no-principals", () => {
+    assert.deepEqual(decideAcl([], tokenPath, me), { kind: "no-principals" });
+    const garbage = ["Access is denied.", "The system cannot find the file specified."];
+    assert.deepEqual(decideAcl(garbage, tokenPath, me), { kind: "no-principals" });
+  });
+
+  it("the trailing Successfully-processed line and the blank line are not principals", () => {
+    assert.deepEqual(principalsOf(tail, tokenPath), []);
+    assert.deepEqual(principalsOf([`${tokenPath} ${me}:(F)`, ...tail], tokenPath), [me]);
+  });
+
+  it("verify-service.ps1 check (d) carries the algorithm the mirror depends on", () => {
+    const v = ps1("verify-service.ps1");
+    const start = v.indexOf("$Me = [System.Security.Principal.WindowsIdentity]");
+    const end = v.indexOf("$read = @(Get-NetTCPConnection");
+    assert.ok(start >= 0, "start marker");
+    assert.ok(end >= 0, "end marker");
+    assert.ok(start < end, "start before end");
+    const block = v.slice(start, end);
+    let pos = 0;
+    for (const needle of [
+      "& icacls.exe $P.TOKEN_FILE",
+      "if ($s.StartsWith($P.TOKEN_FILE)) { $s = $s.Substring($P.TOKEN_FILE.Length) }",
+      "if ($s -match '^\\s*(.+):\\(') { $principals += $Matches[1].Trim() }",
+      "$others = @($principals | Where-Object { $_ -ne $Me })",
+      "if ($principals.Count -eq 0) { Bad",
+      "elseif ($others.Count -gt 0) { Bad",
+      "else { Ok",
+    ]) {
+      const at = block.indexOf(needle, pos);
+      assert.ok(at >= 0, needle);
+      pos = at + needle.length;
     }
   });
 });
