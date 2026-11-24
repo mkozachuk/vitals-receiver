@@ -90,6 +90,28 @@ jobs:
             Format-List ProcessId, ParentProcessId, SessionId, CommandLine
           $log = "$env:LOCALAPPDATA\vitals\logs\vitals.log"
           if (Test-Path $log) { 'vitals.log:'; Get-Content -Tail 50 $log } else { 'no vitals.log' }
+          # Where does the action die? Windows PowerShell 5.1 parses run.ps1, then
+          # runs the task's own argument line with a node that does not exist
+          # (nothing is served) and a scratch log; its stderr is printed.
+          $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+          $run = Join-Path $PWD 'scripts\windows\run.ps1'
+          & $ps -NoProfile -Command "`$e = `$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$run', [ref]`$null, [ref]`$e); 'parse errors: ' + @(`$e).Count; `$e | ForEach-Object { [string]`$_.Extent.StartLineNumber + ': ' + `$_.Message }"
+          'acl of the checkout, run.ps1 and node:'
+          icacls $PWD
+          icacls $run
+          icacls (Split-Path -Parent (Get-Command node).Path)
+          whoami /groups /fo csv | ConvertFrom-Csv | Format-Table 'Group Name', Attributes -AutoSize | Out-String -Width 200
+          if ($t) {
+            $probeLog = Join-Path $env:RUNNER_TEMP 'probe\vitals.log'
+            $a = $t.Actions[0].Arguments -replace '-Node "[^"]*"', '-Node "C:\no-such-dir\node.exe"' -replace '-Log "[^"]*"', ('-Log "' + $probeLog + '"')
+            $p = Start-Process -FilePath $t.Actions[0].Execute -ArgumentList $a -WorkingDirectory $t.Actions[0].WorkingDirectory -PassThru -NoNewWindow -RedirectStandardError "$env:RUNNER_TEMP\probe-err.txt" -RedirectStandardOutput "$env:RUNNER_TEMP\probe-out.txt"
+            if (-not $p.WaitForExit(6000)) { 'probe still running after 6 s (past the start)'; Stop-Process -Id $p.Id -Force } else { 'probe exited ' + $p.ExitCode }
+            'probe stderr:'; Get-Content "$env:RUNNER_TEMP\probe-err.txt" -ErrorAction SilentlyContinue
+            'probe stdout:'; Get-Content "$env:RUNNER_TEMP\probe-out.txt" -ErrorAction SilentlyContinue
+            'probe log:'; Get-Content $probeLog -ErrorAction SilentlyContinue
+          }
+          Get-WinEvent -LogName 'Windows PowerShell' -MaxEvents 40 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match 'run\.ps1' } | Select-Object -First 6 | Format-List TimeCreated, Id, Message
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run service:verify
       - name: first delivery
