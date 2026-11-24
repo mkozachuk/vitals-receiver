@@ -23,7 +23,12 @@ if (-not $task) {
 } elseif (($task.State -eq 'Running') -or ($alive -gt 0)) {
   Ok ('(a) task ' + $TaskName + ' is ' + $task.State + ', node processes: ' + $alive)
 } else {
-  Bad ('(a) task ' + $TaskName + ' is ' + $task.State + ' and no node is serving -- see ' + $P.LOG_FILE)
+  # LastTaskResult says why: 0x41303 never ran, 0x41301 still running, anything
+  # else is the action's own exit code or a Task Scheduler HRESULT.
+  $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+  $why = 'LastTaskResult unknown'
+  if ($info) { $why = 'LastTaskResult 0x' + ([uint32]$info.LastTaskResult).ToString('X8') + ', last run ' + [string]$info.LastRunTime }
+  Bad ('(a) task ' + $TaskName + ' is ' + $task.State + ' and no node is serving (' + $why + ') -- see ' + $P.LOG_FILE)
 }
 
 $ingest = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$P.INGEST_PORT) -ErrorAction SilentlyContinue)

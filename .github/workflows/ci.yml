@@ -59,6 +59,30 @@ jobs:
         run: npm run token:mint
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run service:install
+      # NB-842 B1: what Task Scheduler holds and did. Read-only; never decides
+      # the job (continue-on-error), the verify and delivery steps do.
+      - name: task diagnostics after install
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          $t = Get-ScheduledTask -TaskName vitals -ErrorAction SilentlyContinue
+          if (-not $t) { 'no scheduled task vitals' } else {
+            'state: ' + $t.State
+            $t.Actions | Format-List Execute, Arguments, WorkingDirectory
+            $t.Principal | Format-List UserId, LogonType, RunLevel
+            $t.Triggers | Format-List *
+            $i = Get-ScheduledTaskInfo -TaskName vitals
+            'LastTaskResult: {0} (0x{1:X8})' -f $i.LastTaskResult, [uint32]$i.LastTaskResult
+            'LastRunTime: ' + $i.LastRunTime + '   NumberOfMissedRuns: ' + $i.NumberOfMissedRuns
+          }
+          'whoami: ' + [System.Security.Principal.WindowsIdentity]::GetCurrent().Name + '   session: ' + (Get-Process -Id $PID).SessionId
+          query user 2>&1 | Out-String
+          Get-WinEvent -LogName Microsoft-Windows-TaskScheduler/Operational -MaxEvents 30 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match 'vitals' } | Format-List TimeCreated, Id, Message
+          Get-CimInstance Win32_Process -Filter "Name = 'node.exe' OR Name = 'powershell.exe'" |
+            Format-List ProcessId, ParentProcessId, SessionId, CommandLine
+          $log = "$env:LOCALAPPDATA\vitals\logs\vitals.log"
+          if (Test-Path $log) { 'vitals.log:'; Get-Content -Tail 50 $log } else { 'no vitals.log' }
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run service:verify
       - name: first delivery
@@ -71,6 +95,30 @@ jobs:
       - name: logs
         if: always()
         run: Get-Content -Tail 50 "$env:LOCALAPPDATA\vitals\logs\vitals.log" -ErrorAction SilentlyContinue
+      # NB-842 B1: what Task Scheduler holds and did. Read-only; never decides
+      # the job (continue-on-error), the verify and delivery steps do.
+      - name: task diagnostics before uninstall
+        if: always()
+        continue-on-error: true
+        run: |
+          $t = Get-ScheduledTask -TaskName vitals -ErrorAction SilentlyContinue
+          if (-not $t) { 'no scheduled task vitals' } else {
+            'state: ' + $t.State
+            $t.Actions | Format-List Execute, Arguments, WorkingDirectory
+            $t.Principal | Format-List UserId, LogonType, RunLevel
+            $t.Triggers | Format-List *
+            $i = Get-ScheduledTaskInfo -TaskName vitals
+            'LastTaskResult: {0} (0x{1:X8})' -f $i.LastTaskResult, [uint32]$i.LastTaskResult
+            'LastRunTime: ' + $i.LastRunTime + '   NumberOfMissedRuns: ' + $i.NumberOfMissedRuns
+          }
+          'whoami: ' + [System.Security.Principal.WindowsIdentity]::GetCurrent().Name + '   session: ' + (Get-Process -Id $PID).SessionId
+          query user 2>&1 | Out-String
+          Get-WinEvent -LogName Microsoft-Windows-TaskScheduler/Operational -MaxEvents 30 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match 'vitals' } | Format-List TimeCreated, Id, Message
+          Get-CimInstance Win32_Process -Filter "Name = 'node.exe' OR Name = 'powershell.exe'" |
+            Format-List ProcessId, ParentProcessId, SessionId, CommandLine
+          $log = "$env:LOCALAPPDATA\vitals\logs\vitals.log"
+          if (Test-Path $log) { 'vitals.log:'; Get-Content -Tail 50 $log } else { 'no vitals.log' }
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run service:uninstall
       - name: store and credential kept
