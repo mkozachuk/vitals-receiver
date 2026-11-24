@@ -90,6 +90,7 @@ jobs:
             Format-List ProcessId, ParentProcessId, SessionId, CommandLine
           $log = "$env:LOCALAPPDATA\vitals\logs\vitals.log"
           if (Test-Path $log) { 'vitals.log:'; Get-Content -Tail 50 $log } else { 'no vitals.log' }
+          $global:LASTEXITCODE = 0
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run service:verify
       - name: first delivery
@@ -127,6 +128,7 @@ jobs:
             Format-List ProcessId, ParentProcessId, SessionId, CommandLine
           $log = "$env:LOCALAPPDATA\vitals\logs\vitals.log"
           if (Test-Path $log) { 'vitals.log:'; Get-Content -Tail 50 $log } else { 'no vitals.log' }
+          $global:LASTEXITCODE = 0
       - if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: npm run service:uninstall
       - name: store and credential kept
