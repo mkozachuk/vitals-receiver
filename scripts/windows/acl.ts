@@ -25,8 +25,9 @@ export function principalsOf(lines: readonly string[], tokenPath: string): strin
 
 export function decideAcl(lines: readonly string[], tokenPath: string, me: string): AclVerdict {
   const principals = principalsOf(lines, tokenPath);
-  // PowerShell -ne is case-insensitive; this mirror keeps the brief's strict !==.
-  const others = principals.filter((p) => p !== me);
+  // Matches PowerShell -ne, which compares strings case-insensitively; others keep their spelling.
+  const meLower = me.toLowerCase();
+  const others = principals.filter((p) => p.toLowerCase() !== meLower);
   if (principals.length === 0) return { kind: "no-principals" };
   if (others.length > 0) return { kind: "others", others };
   return { kind: "ok" };

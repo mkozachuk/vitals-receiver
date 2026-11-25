@@ -516,6 +516,13 @@ describe("windows service: verify check (d) credential ACL (NB-847)", () => {
     });
   });
 
+  it("me printed by icacls in another case -> still me (PowerShell -ne is case-insensitive)", () => {
+    const meOtherCase = "desktop-x\\ALICE";
+    assert.deepEqual(decideAcl([`${tokenPath} ${meOtherCase}:(F)`, ...tail], tokenPath, me), { kind: "ok" });
+    const lines = [`${tokenPath} ${meOtherCase}:(F)`, `${pad}NT AUTHORITY\\SYSTEM:(I)(F)`, ...tail];
+    assert.deepEqual(decideAcl(lines, tokenPath, me), { kind: "others", others: ["NT AUTHORITY\\SYSTEM"] });
+  });
+
   it("first row path-prefixed, later rows indented: all principals, trimmed, no path", () => {
     const lines = [`${tokenPath} ${me}:(F)`, `${pad}BUILTIN\\Users:(I)(RX)`, ...tail];
     assert.deepEqual(principalsOf(lines, tokenPath), [me, "BUILTIN\\Users"]);
